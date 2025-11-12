@@ -76,7 +76,7 @@ update_templates() {
 
 list_templates() {
     [[ ! -d "$TEMPLATES_DIR" ]] && update_templates
-    info "Available templates (user templates then bundled templates):"
+    info "Available templates:"
     if [[ -d "$TEMPLATES_DIR" ]]; then
         ls -1 "$TEMPLATES_DIR"
     fi
