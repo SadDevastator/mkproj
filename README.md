@@ -6,12 +6,12 @@ mkproj is a small project scaffolding helper that manages language templates and
 Usage
 -----
 
--- Create a project from a template:
+- Create a project from a template:
 ```bash
 mkproj create <project-name> <template-name> [--auto-install] [--git] [--code|-C] [--dir <path>]
 ```
 
--- Add a template (copies a folder into the local templates dir):
+- Add a template (copies a folder into the local templates dir):
 ```bash
 mkproj add-template <source-folder> <template-name> [--dependencies "k=v[,k2=v2,...]"]
 ```
@@ -26,7 +26,7 @@ mkproj remove-template <template-name>
 mkproj update-dependancies <template-name> "k=v[,k2=v2,...]"
 ```
 
--- List available templates:
+- List available templates:
 ```bash
 mkproj list-templates
 ```
