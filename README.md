@@ -43,11 +43,13 @@ To install into your user bin directory run the provided installer:
 
 Clone the repo and run the installer locally
 ```bash
+# replace bash with your shell if you are using a different one
 git clone https://github.com/SadDevastator/mkproj.git /tmp/mkproj && bash /tmp/mkproj/install.sh
 ```
 
 Or run the installer directly
 ```bash
+# replace bash with your shell if you are using a different one
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/SadDevastator/mkproj/master/install.sh)"
 ```
 

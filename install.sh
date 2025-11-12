@@ -61,6 +61,41 @@ chmod +x "$INSTALL_PATH"
 ln -sf "$INSTALL_PATH" "$DEST/mkproject"
 success "Created symlink: $DEST/mkproject -> $INSTALL_PATH"
 
+src_dir="$(cd "$(dirname "$SRC")" && pwd)"
+templates_src="$src_dir/templates"
+config_src="$src_dir/config"
+user_templates="$HOME/.config/mkproj/templates"
+user_config="$HOME/.config/mkproj/config"
+mkdir -p "$user_templates" "$user_config"
+
+if [[ -d "$templates_src" ]]; then
+    info "Installing bundled templates from $templates_src"
+    for d in "$templates_src"/*; do
+        [[ -d "$d" ]] || continue
+        base="$(basename "$d")"
+        if [[ -e "$user_templates/$base" ]]; then
+            info "User template '$base' already exists, skipping"
+        else
+            cp -r "$d" "$user_templates/"
+            success "Installed bundled template: $base"
+        fi
+    done
+fi
+
+if [[ -d "$config_src" ]]; then
+    info "Installing default config files from $config_src"
+    for f in "$config_src"/*; do
+        [[ -f "$f" ]] || continue
+        base="$(basename "$f")"
+        if [[ -f "$user_config/$base" ]]; then
+            info "Config '$base' exists, skipping"
+        else
+            cp "$f" "$user_config/"
+            success "Installed default config: $base"
+        fi
+    done
+fi
+
 SNIPPET='export PATH="$HOME/.local/bin:$PATH"'
 for rc in "$HOME/.profile" "$HOME/.bashrc" "$HOME/.zshrc"; do
     if [[ -f "$rc" ]]; then
