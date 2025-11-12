@@ -4,6 +4,7 @@ set -e
 
 SRC_ARG="$1"
 TMP_CLONE_DIR=""
+DEFAULT_REPO="https://github.com/SadDevastator/mkproj.git"
 
 if [[ -n "$SRC_ARG" ]]; then
     if [[ -f "$SRC_ARG" ]]; then
@@ -27,8 +28,15 @@ if [[ -n "$SRC_ARG" ]]; then
 else
     SRC="$(pwd)/mkproj"
     if [[ ! -f "$SRC" ]]; then
-        echo "mkproj not found at $SRC. Run this installer from the repo root or pass the path to mkproj as the first argument." >&2
-        exit 1
+        echo "mkproj not found at $SRC. Attempting to clone default repo: $DEFAULT_REPO"
+        if ! command -v git >/dev/null 2>&1; then
+            echo "git is required to clone $DEFAULT_REPO. Please install git or run this installer from the repo root." >&2
+            exit 1
+        fi
+        TMP_CLONE_DIR=$(mktemp -d)
+        git clone --depth 1 "$DEFAULT_REPO" "$TMP_CLONE_DIR" || { echo "git clone failed" >&2; rm -rf "$TMP_CLONE_DIR"; exit 1; }
+        SRC="$TMP_CLONE_DIR/mkproj"
+        echo "Using mkproj from cloned repo: $DEFAULT_REPO"
     fi
 fi
 

@@ -41,13 +41,15 @@ Installation
 
 To install into your user bin directory run the provided installer:
 
+Clone the repo and run the installer locally
 ```bash
-bash install.sh
+git clone https://github.com/SadDevastator/mkproj.git /tmp/mkproj && bash /tmp/mkproj/install.sh
 ```
 
-# Examples: install directly from GitHub (replace with real repo and uncomment to use)
-# git clone https://github.com/<owner>/<repo>.git /tmp/mkproj && bash /tmp/mkproj/install.sh
-# bash -c "$(curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/install.sh)"
+Or run the installer directly
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/SadDevastator/mkproj/main/install.sh)"
+```
 
 The installer copies the `mkproj` script to `~/.local/bin/mkproj`, makes it executable and appends `~/.local/bin` to common shell rc files (`.profile`, `.bashrc`, `.zshrc`, and Fish config) if needed.
 
