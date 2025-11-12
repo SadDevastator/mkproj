@@ -1,0 +1,451 @@
+#!/usr/bin/env bash
+
+set -e
+
+CONFIG_DIR="$HOME/.config/mkproj"
+TEMPLATES_DIR="$CONFIG_DIR/templates"
+BIN_DIR="$HOME/.local/bin"
+mkdir -p "$CONFIG_DIR/templates" "$BIN_DIR"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+load_deps() {
+    local tmpl="$1"
+    local confdir="$CONFIG_DIR/config"
+    local conf_file="$confdir/${tmpl^^}.conf"
+
+    if [[ ! -d "$confdir" ]]; then
+        mkdir -p "$confdir"
+        local script_dir
+        script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        if [[ -d "$script_dir/config" ]]; then
+            cp -r "$script_dir/config/." "$confdir/" 2>/dev/null || true
+        fi
+    fi
+
+    declare -g -A "DEPS_${tmpl^^}"
+
+    if [[ -f "$conf_file" ]]; then
+        local line key val
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+            key="${line%%=*}"
+            val="${line#*=}"
+            key="$(echo "$key" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+            val="$(echo "$val" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+            if [[ -n "$key" ]]; then
+                eval "DEPS_${tmpl^^}[\"$key\"]=\"$val\""
+            fi
+        done < "$conf_file"
+    else
+        echo "Note: no dependency config found for '$tmpl' at '$conf_file' (continuing with empty mapping)"
+    fi
+}
+
+usage() {
+    echo "Usage:"
+    echo "  mkproj create <project-name> <template-name> [--auto-install] [--git] [--code|-C] [--dir <path>]"
+    echo "  mkproj add-template <source-folder> <template-name> [--dependencies \"k=v[,k2=v2...]\"]"
+    echo "  mkproj remove-template <template-name>"
+    echo "  mkproj update-dependancies <template-name> \"k=v[,k2=v2...]\""
+    echo "  mkproj update-templates"
+    echo "  mkproj list-templates"
+    exit 1
+}
+
+update_templates() {
+    echo "Updating templates..."
+    if [[ -d "$TEMPLATES_DIR/.git" ]]; then
+        git -C "$TEMPLATES_DIR" pull -q || true
+    else
+        echo "No git repo for templates. Add templates manually or clone from GitHub."
+    fi
+    echo "Templates updated"
+}
+
+list_templates() {
+    [[ ! -d "$TEMPLATES_DIR" ]] && update_templates
+    echo "Available templates (user templates then bundled templates):"
+    if [[ -d "$TEMPLATES_DIR" ]]; then
+        ls -1 "$TEMPLATES_DIR"
+    fi
+    if [[ -d "$script_dir/templates" ]]; then
+        echo "--- bundled ---"
+        ls -1 "$script_dir/templates"
+    fi
+}
+
+
+find_template() {
+    local tmpl="$1"
+    local lc="${tmpl,,}"
+    local d base
+
+    if [[ -d "$TEMPLATES_DIR" ]]; then
+        for d in "$TEMPLATES_DIR"/*; do
+            [[ -d "$d" ]] || continue
+            base="$(basename "$d")"
+            if [[ "${base,,}" == "$lc" ]]; then
+                echo "$d"
+                return 0
+            fi
+        done
+    fi
+
+    if [[ -d "$script_dir/templates" ]]; then
+        for d in "$script_dir/templates"/*; do
+            [[ -d "$d" ]] || continue
+            base="$(basename "$d")"
+            if [[ "${base,,}" == "$lc" ]]; then
+                echo "$d"
+                return 0
+            fi
+        done
+    fi
+
+    return 1
+}
+
+
+detect_pkgmgr() {
+    local pkgmanagers=("apt" "dnf" "pacman" "zypper" "apk" "xbps-install")
+    for mgr in "${pkgmanagers[@]}"; do
+        if command -v "$mgr" &>/dev/null; then
+            echo "$mgr"
+            return
+        fi
+    done
+    echo "unknown"
+}
+
+
+install_missing() {
+    local tmpl="$1"
+    load_deps "$tmpl"
+
+    local -n depmap="DEPS_${tmpl^^}"
+    local missing=()
+    for dep in "${!depmap[@]}"; do
+        command -v "$dep" &>/dev/null || missing+=("${depmap[$dep]}")
+    done
+
+    if [[ ${#missing[@]} -eq 0 ]]; then
+        echo "All dependencies installed."
+        return
+    fi
+
+    echo "Missing dependencies: ${missing[*]}"
+
+    declare -a pkgmgrs=()
+    for candidate in apt dnf pacman zypper apk xbps-install; do
+        command -v "$candidate" &>/dev/null && pkgmgrs+=("$candidate")
+    done
+
+    primary=$(detect_pkgmgr)
+
+    echo
+    echo "Available package managers:"
+    idx=1
+    for mgr in "${pkgmgrs[@]}"; do
+        if [[ "$mgr" == "$primary" ]]; then
+            echo "  $idx) $mgr (primary)"
+        else
+            echo "  $idx) $mgr"
+        fi
+        ((idx++))
+    done
+    echo "  $idx) none (skip installation)"
+    read -p "Choose package manager [$idx]: " choice
+    choice=${choice:-$idx}
+
+    if [[ "$choice" -lt "$idx" ]]; then
+        selected="${pkgmgrs[$((choice-1))]}"
+        echo "Installing using $selected..."
+        case "$selected" in
+            apt)
+                sudo apt install -y "${missing[@]}" ;;
+            dnf)
+                sudo dnf install -y "${missing[@]}" ;;
+            pacman)
+                sudo pacman -S --noconfirm "${missing[@]}" ;;
+            zypper)
+                sudo zypper install -y "${missing[@]}" ;;
+            apk)
+                sudo apk add "${missing[@]}" ;;
+            xbps-install)
+                sudo xbps-install -y "${missing[@]}" ;;
+        esac
+    else
+        echo "Skipping installation. You may install dependencies manually later."
+    fi
+}
+
+
+create_project() {
+    local name="$1" tmpl="$2"
+    shift 2
+    local auto_install=0 git_init=0 open_code=0
+
+    local target_dir
+    target_dir="$(pwd)"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --auto-install)
+                auto_install=1
+                shift
+                ;;
+            --git)
+                git_init=1
+                shift
+                ;;
+            --code|-C)
+                open_code=1
+                shift
+                ;;
+            --dir)
+                target_dir="$2"
+                shift 2
+                ;;
+            --dir=*)
+                target_dir="${1#*=}"
+                shift
+                ;;
+            --*)
+                echo "Unknown option: $1"
+                shift
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    [[ -z "$name" || -z "$tmpl" ]] && usage
+
+    if tmpl_dir="$(find_template "$tmpl")"; then
+        echo "Using template: $tmpl_dir"
+        ((auto_install)) && install_missing "$tmpl"
+
+        local dest="$target_dir/$name"
+        mkdir -p "$dest"
+        cp -r "$tmpl_dir/." "$dest/"
+        find "$dest" -type f -exec sed -i "s/{{PROJECT_NAME}}/$name/g" {} + 2>/dev/null || true
+
+        if [[ -x "$dest/create.sh" ]]; then
+            echo "Running template create hook in $dest..."
+            (cd "$dest" && PROJECT_NAME="$name" PROJECT_DIR="$dest" ./create.sh) || true
+        fi
+    else
+        case "$tmpl" in
+            rust|Rust)
+                if ! command -v cargo &>/dev/null; then
+                    echo "cargo not found."
+                    read -p "Install Rust toolchain now using rustup? (This will run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh) [Y/n]: " ans
+                    ans=${ans:-Y}
+                    if [[ "$ans" =~ ^[Yy] ]]; then
+                        echo "Installing rustup and Rust toolchain..."
+                        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh || { echo "rustup install failed"; exit 1; }
+                        if [[ -f "$HOME/.cargo/env" ]]; then
+                            source "$HOME/.cargo/env"
+                        fi
+                        if ! command -v cargo &>/dev/null; then
+                            echo "cargo still not found after installation. Please restart your shell or add \$HOME/.cargo/bin to PATH and try again."
+                            exit 1
+                        fi
+                    else
+                        echo "cargo required to create Rust projects. Aborting."
+                        exit 1
+                    fi
+                fi
+                (cd "$target_dir" && cargo new "$name")
+                ;;
+            *)
+                echo "Unsupported template: $tmpl"
+                list_templates
+                exit 1
+                ;;
+        esac
+    fi
+    ((git_init)) && git -C "$name" init -q && echo "📦 Git initialized"
+
+    ((open_code)) && command -v code &>/dev/null && code "$name"
+
+    echo "Project '$name' ($tmpl) created successfully!"
+}
+
+
+add_template() {
+    local src="$1" tmpl="$2"
+    shift 2 || true
+    local deps_arg=""
+
+    [[ -z "$src" || -z "$tmpl" ]] && { echo "Usage: mkproj add-template <source-folder> <template-name> [--dependencies \"k=v[,k2=v2...]\"]"; exit 1; }
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --dependencies|--dependancies)
+                deps_arg="$2"
+                shift 2
+                ;;
+            --dependencies=*)
+                deps_arg="${1#*=}"
+                shift
+                ;;
+            --dependancies=*)
+                deps_arg="${1#*=}"
+                shift
+                ;;
+            *)
+                echo "Unknown option: $1"
+                shift
+                ;;
+        esac
+    done
+
+    if [[ ! -d "$src" ]]; then
+        echo "Source folder '$src' does not exist or is not a directory." >&2
+        exit 1
+    fi
+
+    mkdir -p "$TEMPLATES_DIR"
+    local dest="$TEMPLATES_DIR/$tmpl"
+
+    if [[ -e "$dest" ]]; then
+        read -p "Template destination '$dest' exists. Overwrite? [y/N]: " ans
+        case "$ans" in
+            [Yy]*) rm -rf "$dest" ;;
+            *) echo "Aborted."; return 1 ;;
+        esac
+    fi
+
+    cp -r "$src" "$dest"
+    echo "Template copied to: $dest"
+
+    if [[ -n "$deps_arg" ]]; then
+        mkdir -p "$CONFIG_DIR/config"
+        local conf_file="$CONFIG_DIR/config/${tmpl^^}.conf"
+        echo "# Generated by mkproj add-template on $(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$conf_file"
+        local normalized
+        normalized="$(echo "$deps_arg" | tr ',' '\n')"
+        while IFS= read -r pair; do
+            [[ -z "$pair" ]] && continue
+            pair="$(echo "$pair" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+            if [[ "$pair" != *=* ]]; then
+                echo "Skipping invalid dependency entry: $pair" >&2
+                continue
+            fi
+            echo "$pair" >> "$conf_file"
+        done <<< "$normalized"
+        echo "Wrote dependencies to $conf_file"
+    fi
+
+    echo "add-template complete. Run 'mkproj list-templates' to verify templates."
+}
+
+
+remove_template() {
+    local name="$1"
+    [[ -z "$name" ]] && { echo "Usage: mkproj remove-template <template-name>"; exit 1; }
+
+    local target=""
+    if [[ -d "$TEMPLATES_DIR/$name" ]]; then
+        target="$TEMPLATES_DIR/$name"
+    else
+        for d in "$TEMPLATES_DIR"/*; do
+            [[ -d "$d" ]] || continue
+            if [[ "${name,,}" == "$(basename "$d" | tr '[:upper:]' '[:lower:]')" ]]; then
+                target="$d"
+                break
+            fi
+        done
+    fi
+
+    if [[ -z "$target" ]]; then
+        echo "Template '$name' not found in $TEMPLATES_DIR" >&2
+        exit 1
+    fi
+
+    read -p "Permanently remove template '$target' and its dependency file? [y/N]: " ans
+    case "$ans" in
+        [Yy]*) ;;
+        *) echo "Aborted."; return 1 ;;
+    esac
+
+    rm -rf "$target"
+    echo "Removed template directory: $target"
+
+    local base="$(basename "$target")"
+    local conf_file="$CONFIG_DIR/config/${base^^}.conf"
+    if [[ -f "$conf_file" ]]; then
+        rm -f "$conf_file"
+        echo "Removed dependency config: $conf_file"
+    fi
+}
+
+
+update_dependancies() {
+    local name="$1" deps_arg="$2"
+    [[ -z "$name" || -z "$deps_arg" ]] && { echo "Usage: mkproj update-dependancies <template-name> \"k=v[,k2=v2...]\""; exit 1; }
+
+    local tmpl=""
+    if [[ -d "$TEMPLATES_DIR/$name" ]]; then
+        tmpl="$TEMPLATES_DIR/$name"
+    else
+        for d in "$TEMPLATES_DIR"/*; do
+            [[ -d "$d" ]] || continue
+            if [[ "${name,,}" == "$(basename "$d" | tr '[:upper:]' '[:lower:]')" ]]; then
+                tmpl="$d"
+                break
+            fi
+        done
+    fi
+
+    if [[ -z "$tmpl" ]]; then
+        echo "Template '$name' not found in $TEMPLATES_DIR" >&2
+        exit 1
+    fi
+
+    mkdir -p "$CONFIG_DIR/config"
+    local base="$(basename "$tmpl")"
+    local conf_file="$CONFIG_DIR/config/${base^^}.conf"
+    echo "# Updated by mkproj on $(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$conf_file"
+    local normalized
+    normalized="$(echo "$deps_arg" | tr ',' '\n')"
+    while IFS= read -r pair; do
+        [[ -z "$pair" ]] && continue
+        pair="$(echo "$pair" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+        if [[ "$pair" != *=* ]]; then
+            echo "Skipping invalid dependency entry: $pair" >&2
+            continue
+        fi
+        echo "$pair" >> "$conf_file"
+    done <<< "$normalized"
+    echo "Wrote dependencies to $conf_file"
+}
+
+
+[[ $# -lt 1 ]] && usage
+cmd="$1"; shift
+
+case "$cmd" in
+    create)
+        create_project "$@"
+        ;;
+    add-template)
+        add_template "$@"
+        ;;
+    remove-template)
+        remove_template "$@"
+        ;;
+    update-dependancies)
+        update_dependancies "$@"
+        ;;
+    update-templates)
+        update_templates
+        ;;
+    list-templates)
+        list_templates
+        ;;
+    *)
+        usage
+        ;;
+esac
