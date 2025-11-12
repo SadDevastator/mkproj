@@ -48,7 +48,7 @@ git clone https://github.com/SadDevastator/mkproj.git /tmp/mkproj && bash /tmp/m
 
 Or run the installer directly
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/SadDevastator/mkproj/main/install.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/SadDevastator/mkproj/master/install.sh)"
 ```
 
 The installer copies the `mkproj` script to `~/.local/bin/mkproj`, makes it executable and appends `~/.local/bin` to common shell rc files (`.profile`, `.bashrc`, `.zshrc`, and Fish config) if needed.

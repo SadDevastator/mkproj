@@ -8,6 +8,18 @@ BIN_DIR="$HOME/.local/bin"
 mkdir -p "$CONFIG_DIR/templates" "$BIN_DIR"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+RED="\033[31m"
+GREEN="\033[32m"
+YELLOW="\033[33m"
+BLUE="\033[34m"
+BOLD="\033[1m"
+RESET="\033[0m"
+
+info() { printf "%b\n" "${BLUE}${1}${RESET}"; }
+success() { printf "%b\n" "${GREEN}${1}${RESET}"; }
+warn() { printf "%b\n" "${YELLOW}${1}${RESET}"; }
+err() { printf "%b\n" "${RED}${1}${RESET}"; }
+
 load_deps() {
     local tmpl="$1"
     local confdir="$CONFIG_DIR/config"
@@ -37,7 +49,7 @@ load_deps() {
             fi
         done < "$conf_file"
     else
-        echo "Note: no dependency config found for '$tmpl' at '$conf_file' (continuing with empty mapping)"
+        warn "Note: no dependency config found for '$tmpl' at '$conf_file' (continuing with empty mapping)"
     fi
 }
 
@@ -53,23 +65,23 @@ usage() {
 }
 
 update_templates() {
-    echo "Updating templates..."
+    info "Updating templates..."
     if [[ -d "$TEMPLATES_DIR/.git" ]]; then
         git -C "$TEMPLATES_DIR" pull -q || true
     else
-        echo "No git repo for templates. Add templates manually or clone from GitHub."
+        warn "No git repo for templates. Add templates manually or clone from GitHub."
     fi
-    echo "Templates updated"
+    success "Templates updated"
 }
 
 list_templates() {
     [[ ! -d "$TEMPLATES_DIR" ]] && update_templates
-    echo "Available templates (user templates then bundled templates):"
+    info "Available templates (user templates then bundled templates):"
     if [[ -d "$TEMPLATES_DIR" ]]; then
         ls -1 "$TEMPLATES_DIR"
     fi
     if [[ -d "$script_dir/templates" ]]; then
-        echo "--- bundled ---"
+        info "--- bundled ---"
         ls -1 "$script_dir/templates"
     fi
 }
@@ -133,7 +145,7 @@ install_missing() {
         return
     fi
 
-    echo "Missing dependencies: ${missing[*]}"
+    warn "Missing dependencies: ${missing[*]}"
 
     declare -a pkgmgrs=()
     for candidate in apt dnf pacman zypper apk xbps-install; do
@@ -143,7 +155,7 @@ install_missing() {
     primary=$(detect_pkgmgr)
 
     echo
-    echo "Available package managers:"
+    info "Available package managers:"
     idx=1
     for mgr in "${pkgmgrs[@]}"; do
         if [[ "$mgr" == "$primary" ]]; then
@@ -158,8 +170,8 @@ install_missing() {
     choice=${choice:-$idx}
 
     if [[ "$choice" -lt "$idx" ]]; then
-        selected="${pkgmgrs[$((choice-1))]}"
-        echo "Installing using $selected..."
+    selected="${pkgmgrs[$((choice-1))]}"
+    info "Installing using $selected..."
         case "$selected" in
             apt)
                 sudo apt install -y "${missing[@]}" ;;
@@ -175,7 +187,7 @@ install_missing() {
                 sudo xbps-install -y "${missing[@]}" ;;
         esac
     else
-        echo "Skipping installation. You may install dependencies manually later."
+        warn "Skipping installation. You may install dependencies manually later."
     fi
 }
 
@@ -222,7 +234,7 @@ create_project() {
     [[ -z "$name" || -z "$tmpl" ]] && usage
 
     if tmpl_dir="$(find_template "$tmpl")"; then
-        echo "Using template: $tmpl_dir"
+        info "Using template: $tmpl_dir"
         ((auto_install)) && install_missing "$tmpl"
 
         local dest="$target_dir/$name"
@@ -231,14 +243,14 @@ create_project() {
         find "$dest" -type f -exec sed -i "s/{{PROJECT_NAME}}/$name/g" {} + 2>/dev/null || true
 
         if [[ -x "$dest/create.sh" ]]; then
-            echo "Running template create hook in $dest..."
+            info "Running template create hook in $dest..."
             (cd "$dest" && PROJECT_NAME="$name" PROJECT_DIR="$dest" ./create.sh) || true
         fi
     else
         case "$tmpl" in
             rust|Rust)
                 if ! command -v cargo &>/dev/null; then
-                    echo "cargo not found."
+                    warn "cargo not found."
                     read -p "Install Rust toolchain now using rustup? (This will run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh) [Y/n]: " ans
                     ans=${ans:-Y}
                     if [[ "$ans" =~ ^[Yy] ]]; then
@@ -259,7 +271,7 @@ create_project() {
                 (cd "$target_dir" && cargo new "$name")
                 ;;
             *)
-                echo "Unsupported template: $tmpl"
+                err "Unsupported template: $tmpl"
                 list_templates
                 exit 1
                 ;;
@@ -335,10 +347,10 @@ add_template() {
             fi
             echo "$pair" >> "$conf_file"
         done <<< "$normalized"
-        echo "Wrote dependencies to $conf_file"
+        success "Wrote dependencies to $conf_file"
     fi
 
-    echo "add-template complete. Run 'mkproj list-templates' to verify templates."
+    success "add-template complete. Run 'mkproj list-templates' to verify templates."
 }
 
 
