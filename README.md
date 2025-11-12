@@ -70,4 +70,4 @@ Notes
 License
 -------
 
-This repository includes simple user scripts and templates for personal use.
+This project is licensed under the MIT License — see the `LICENSE` file for details.
