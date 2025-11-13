@@ -2,7 +2,7 @@
 
 mkproj is a minimal, script-based project scaffolding helper. It manages templates, per-template
 dependency metadata, and simple hook scripts so you can quickly scaffold projects for C, Rust,
-or any language you add a template for.
+Or any language you add a template for.
 
 This repository contains:
 - `mkproj` — the main CLI script
@@ -38,7 +38,7 @@ mkproj create hello C
 3. Add a script-only template and use it:
 
 ```bash
-mkproj add-template - myscript --script ./create_myscript.sh
+mkproj add-template myscript --script ./create_myscript.sh
 mkproj create example myscript
 ```
 
@@ -53,7 +53,7 @@ Commands (summary)
 
 Design notes
 - Per-template config modules are sourced into the script (trusted content). Prefer using the
-  `$HOME/.config/mkproj/config/YourTemplate.sh` modules which can declare an associative array
+  `$HOME/.config/mkproj/config/YourTemplate.sh` modules, which can declare an associative array
   `DEPS_<TEMPLATE>` and hook functions.
 - The tool prefers `.sh` modules and falls back to legacy `.conf` files for dependency mappings.
 - The installer tries to reload the user's shell environment (best-effort) after installing.
