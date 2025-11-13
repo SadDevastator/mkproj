@@ -76,7 +76,7 @@ if [[ -d "$templates_src" ]]; then
         if [[ -e "$user_templates/$base" ]]; then
             info "User template '$base' already exists, skipping"
         else
-            cp -r "$d" "$user_templates/"
+            cp -a "$d" "$user_templates/" 2>/dev/null || cp -r "$d" "$user_templates/" 2>/dev/null || true
             success "Installed bundled template: $base"
         fi
     done
@@ -124,31 +124,26 @@ info "Attempting to reload your shell profile (best-effort)..."
 
 reloaded=false
 if [[ -n "$SHELL" ]]; then
-    case $(basename "$SHELL") in
-        bash)
-            if [[ -f "$HOME/.bashrc" ]]; then
-                . "$HOME/.bashrc" && reloaded=true
+    shellname="$(basename "$SHELL")"
+    if [[ "$shellname" == "fish" ]]; then
+        fish_conf="$HOME/.config/fish/config.fish"
+        if [[ -f "$fish_conf" ]]; then
+            fish -c "source $fish_conf" >/dev/null 2>&1 && reloaded=true
+        fi
+    else
+        candidates=("$HOME/.bashrc" "$HOME/.profile" "$HOME/.zshrc" "$HOME/.config/fish/config.fish")
+        for rc in "${candidates[@]}"; do
+            [[ -f "$rc" ]] || continue
+            if "$SHELL" -c "source \"$rc\" >/dev/null 2>&1"; then
+                reloaded=true
+                break
             fi
-            if [[ "$reloaded" != true && -f "$HOME/.profile" ]]; then
-                . "$HOME/.profile" && reloaded=true
+            if "$SHELL" -c ". \"$rc\" >/dev/null 2>&1"; then
+                reloaded=true
+                break
             fi
-            ;;
-        zsh)
-            if [[ -f "$HOME/.zshrc" ]]; then
-                . "$HOME/.zshrc" && reloaded=true
-            fi
-            ;;
-        fish)
-            if command -v fish >/dev/null 2>&1; then
-                fish -c 'source $HOME/.config/fish/config.fish' >/dev/null 2>&1 && reloaded=true
-            fi
-            ;;
-        *)
-            if [[ -f "$HOME/.profile" ]]; then
-                . "$HOME/.profile" && reloaded=true
-            fi
-            ;;
-    esac
+        done
+    fi
 fi
 
 if [[ "$reloaded" == true ]]; then

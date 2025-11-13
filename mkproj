@@ -2,11 +2,15 @@
 
 set -e
 
+old_nullglob_setting="$(shopt -p nullglob 2>/dev/null || true)"
+shopt -s nullglob
+
 CONFIG_DIR="$HOME/.config/mkproj"
 TEMPLATES_DIR="$CONFIG_DIR/templates"
 BIN_DIR="$HOME/.local/bin"
 mkdir -p "$CONFIG_DIR/templates" "$BIN_DIR"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEFAULT_REPO="https://github.com/SadDevastator/mkproj.git"
 
 RED="\033[31m"
 GREEN="\033[32m"
@@ -30,13 +34,25 @@ load_deps() {
         local script_dir
         script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
         if [[ -d "$script_dir/config" ]]; then
-            cp -r "$script_dir/config/." "$confdir/" 2>/dev/null || true
+            cp -a "$script_dir/config/." "$confdir/" 2>/dev/null || cp -r "$script_dir/config/." "$confdir/" 2>/dev/null || true
         fi
     fi
 
-    declare -g -A "DEPS_${tmpl^^}"
+    local conf_sh=""
+    for variant in "${tmpl^^}" "${tmpl^}" "${tmpl,,}"; do
+        if [[ -f "$confdir/${variant}.sh" ]]; then
+            conf_sh="$confdir/${variant}.sh"
+            break
+        elif [[ -f "$script_dir/config/${variant}.sh" ]]; then
+            conf_sh="$script_dir/config/${variant}.sh"
+            break
+        fi
+    done
 
-    if [[ -f "$conf_file" ]]; then
+    if [[ -n "$conf_sh" ]]; then
+        . "$conf_sh"
+    elif [[ -f "$conf_file" ]]; then
+        declare -g -A "DEPS_${tmpl^^}"
         local line key val
         while IFS= read -r line || [[ -n "$line" ]]; do
             [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
@@ -53,13 +69,48 @@ load_deps() {
     fi
 }
 
+if [[ -n "$old_nullglob_setting" ]]; then
+    eval "$old_nullglob_setting"
+fi
+
+
+find_config_sh() {
+    local tmpl="$1"
+    local confdir="$CONFIG_DIR/config"
+    local variant
+    for variant in "${tmpl^^}" "${tmpl^}" "${tmpl,,}"; do
+        if [[ -f "$confdir/${variant}.sh" ]]; then
+            printf "%s" "$confdir/${variant}.sh"
+            return 0
+        fi
+    done
+    for variant in "${tmpl^^}" "${tmpl^}" "${tmpl,,}"; do
+        if [[ -f "$script_dir/config/${variant}.sh" ]]; then
+            printf "%s" "$script_dir/config/${variant}.sh"
+            return 0
+        fi
+    done
+    return 1
+}
+
+source_config_module() {
+    local tmpl="$1"
+    local cfg
+    if cfg="$(find_config_sh "$tmpl")"; then
+        . "$cfg"
+        return 0
+    fi
+    return 1
+}
+
 usage() {
     echo "Usage:"
     echo "  mkproj create <project-name> <template-name> [--auto-install] [--git] [--code|-C] [--dir <path>]"
-    echo "  mkproj add-template <source-folder> <template-name> [--dependencies \"k=v[,k2=v2...]\"]"
+    echo "  mkproj add-template <source-folder|-> <template-name> [--script <script-path>] [--dependencies \"k=v[,k2=v2...]\"]"
     echo "  mkproj remove-template <template-name>"
     echo "  mkproj update-dependancies <template-name> \"k=v[,k2=v2...]\""
     echo "  mkproj update-templates"
+    echo "  mkproj update"
     echo "  mkproj list-templates"
     exit 1
 }
@@ -68,21 +119,95 @@ update_templates() {
     info "Updating templates..."
     if [[ -d "$TEMPLATES_DIR/.git" ]]; then
         git -C "$TEMPLATES_DIR" pull -q || true
-    else
-        warn "No git repo for templates. Add templates manually or clone from GitHub."
+        success "Templates updated from git"
+        return 0
     fi
-    success "Templates updated"
+
+    if [[ -n "$MKPROJ_TEMPLATES_REPO" ]]; then
+        if ! command -v git &>/dev/null; then
+            warn "git not available; cannot clone templates from $MKPROJ_TEMPLATES_REPO"
+        else
+            tmpdir=$(mktemp -d)
+            if git clone --depth 1 "$MKPROJ_TEMPLATES_REPO" "$tmpdir"; then
+                mkdir -p "$TEMPLATES_DIR"
+                cp -a "$tmpdir/." "$TEMPLATES_DIR/" 2>/dev/null || cp -r "$tmpdir/." "$TEMPLATES_DIR/" 2>/dev/null || true
+                rm -rf "$tmpdir"
+                success "Cloned templates from $MKPROJ_TEMPLATES_REPO into $TEMPLATES_DIR"
+                return 0
+            else
+                warn "Failed to clone $MKPROJ_TEMPLATES_REPO"
+                rm -rf "$tmpdir"
+            fi
+        fi
+    fi
+
+    if [[ -d "$script_dir/templates" ]]; then
+        mkdir -p "$TEMPLATES_DIR"
+        for d in "$script_dir/templates"/*; do
+            [[ -d "$d" ]] || continue
+            base="$(basename "$d")"
+            if [[ -e "$TEMPLATES_DIR/$base" ]]; then
+                info "User template '$base' already exists, skipping"
+            else
+                cp -a "$d" "$TEMPLATES_DIR/" 2>/dev/null || cp -r "$d" "$TEMPLATES_DIR/" 2>/dev/null || true
+                success "Installed bundled template: $base"
+            fi
+        done
+        success "Bundled templates seeded into $TEMPLATES_DIR"
+        return 0
+    fi
+
+    warn "No git repo for templates, no bundled templates found, and no MKPROJ_TEMPLATES_REPO set. Add templates manually."
+}
+
+update_self() {
+    info "Updating mkproj tool..."
+    if [[ -d "$script_dir/.git" ]]; then
+        git -C "$script_dir" pull --ff-only || warn "git pull failed (non-fatal)"
+        success "Updated mkproj in-place from git repository."
+        return 0
+    fi
+
+    local DEFAULT_REPO="https://github.com/SadDevastator/mkproj.git"
+    if ! command -v git &>/dev/null; then
+        err "git is required to update mkproj when not installed from a git checkout."
+        return 1
+    fi
+
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    if git clone --depth 1 "$DEFAULT_REPO" "$tmpdir"; then
+        if [[ -f "$tmpdir/mkproj" ]]; then
+            cp "$tmpdir/mkproj" "$BIN_DIR/mkproj" && chmod +x "$BIN_DIR/mkproj"
+            success "Reinstalled mkproj from $DEFAULT_REPO to $BIN_DIR/mkproj"
+        else
+            err "Cloned repo did not contain mkproj script."
+            rm -rf "$tmpdir"
+            return 1
+        fi
+    else
+        err "Failed to clone $DEFAULT_REPO"
+        rm -rf "$tmpdir"
+        return 1
+    fi
+    rm -rf "$tmpdir"
 }
 
 list_templates() {
     [[ ! -d "$TEMPLATES_DIR" ]] && update_templates
-    info "Available templates:"
+    info "Available templates:" 
     if [[ -d "$TEMPLATES_DIR" ]]; then
-        ls -1 "$TEMPLATES_DIR"
+        for d in "$TEMPLATES_DIR"/*; do
+            [[ -d "$d" ]] || continue
+            echo "  $(basename "$d")"
+        done
     fi
     if [[ -d "$script_dir/templates" ]]; then
         info "--- bundled ---"
-        ls -1 "$script_dir/templates"
+        for d in "$script_dir/templates"/*; do
+            [[ -d "$d" ]] || continue
+            echo "  $(basename "$d")"
+        done
     fi
 }
 
@@ -170,8 +295,8 @@ install_missing() {
     choice=${choice:-$idx}
 
     if [[ "$choice" -lt "$idx" ]]; then
-    selected="${pkgmgrs[$((choice-1))]}"
-    info "Installing using $selected..."
+        selected="${pkgmgrs[$((choice-1))]}"
+        info "Installing using $selected..."
         case "$selected" in
             apt)
                 sudo apt install -y "${missing[@]}" ;;
@@ -195,7 +320,7 @@ install_missing() {
 create_project() {
     local name="$1" tmpl="$2"
     shift 2
-    local auto_install=0 git_init=0 open_code=0
+    local auto_install=0 git_init=0 open_code=0 update_only=0
 
     local target_dir
     target_dir="$(pwd)"
@@ -203,6 +328,10 @@ create_project() {
         case "$1" in
             --auto-install)
                 auto_install=1
+                shift
+                ;;
+            --update)
+                update_only=1
                 shift
                 ;;
             --git)
@@ -238,44 +367,47 @@ create_project() {
         ((auto_install)) && install_missing "$tmpl"
 
         local dest="$target_dir/$name"
+        if [[ -d "$dest" && $update_only -ne 1 ]]; then
+            err "Destination '$dest' already exists. Use --update to update an existing project."
+            exit 1
+        fi
+
         mkdir -p "$dest"
         cp -r "$tmpl_dir/." "$dest/"
         find "$dest" -type f -exec sed -i "s/{{PROJECT_NAME}}/$name/g" {} + 2>/dev/null || true
 
-        if [[ -x "$dest/create.sh" ]]; then
+        source_config_module "$tmpl" || true
+
+        local create_fn="mkproj_create_${tmpl,,}"
+        if declare -F "$create_fn" >/dev/null 2>&1; then
+            info "Running template create hook function: $create_fn"
+            (cd "$dest" && PROJECT_NAME="$name" PROJECT_DIR="$dest" "$create_fn" "$name" "$dest") || true
+        elif [[ -f "$dest/create.sh" ]]; then
             info "Running template create hook in $dest..."
-            (cd "$dest" && PROJECT_NAME="$name" PROJECT_DIR="$dest" ./create.sh) || true
+            (cd "$dest" && PROJECT_NAME="$name" PROJECT_DIR="$dest" "$SHELL" "./create.sh") || true
+        fi
+        if [[ -d "$dest" && $update_only -eq 1 ]]; then
+            local update_fn="mkproj_update_${tmpl,,}"
+            if declare -F "$update_fn" >/dev/null 2>&1; then
+                info "Running template update hook function: $update_fn"
+                (cd "$dest" && PROJECT_NAME="$name" PROJECT_DIR="$dest" "$update_fn" "$name" "$dest") || true
+            elif [[ -f "$dest/update.sh" ]]; then
+                info "Running template update hook in $dest..."
+                (cd "$dest" && PROJECT_NAME="$name" PROJECT_DIR="$dest" "$SHELL" "./update.sh") || true
+            fi
         fi
     else
-        case "$tmpl" in
-            rust|Rust)
-                if ! command -v cargo &>/dev/null; then
-                    warn "cargo not found."
-                    read -p "Install Rust toolchain now using rustup? (This will run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh) [Y/n]: " ans
-                    ans=${ans:-Y}
-                    if [[ "$ans" =~ ^[Yy] ]]; then
-                        echo "Installing rustup and Rust toolchain..."
-                        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh || { echo "rustup install failed"; exit 1; }
-                        if [[ -f "$HOME/.cargo/env" ]]; then
-                            source "$HOME/.cargo/env"
-                        fi
-                        if ! command -v cargo &>/dev/null; then
-                            echo "cargo still not found after installation. Please restart your shell or add \$HOME/.cargo/bin to PATH and try again."
-                            exit 1
-                        fi
-                    else
-                        echo "cargo required to create Rust projects. Aborting."
-                        exit 1
-                    fi
-                fi
-                (cd "$target_dir" && cargo new "$name")
-                ;;
-            *)
-                err "Unsupported template: $tmpl"
-                list_templates
-                exit 1
-                ;;
-        esac
+        source_config_module "$tmpl" || true
+
+        local create_fn="mkproj_create_${tmpl,,}"
+        if declare -F "$create_fn" >/dev/null 2>&1; then
+            info "Running bundled create function: $create_fn"
+            (cd "$target_dir" && PROJECT_NAME="$name" PROJECT_DIR="$target_dir" "$create_fn" "$name" "$target_dir") || true
+        else
+            err "Unsupported template: $tmpl"
+            list_templates
+            exit 1
+        fi
     fi
     ((git_init)) && git -C "$name" init -q && echo "📦 Git initialized"
 
@@ -288,9 +420,10 @@ create_project() {
 add_template() {
     local src="$1" tmpl="$2"
     shift 2 || true
-    local deps_arg=""
+    local deps_arg="" script_arg=""
+    local force=0
 
-    [[ -z "$src" || -z "$tmpl" ]] && { echo "Usage: mkproj add-template <source-folder> <template-name> [--dependencies \"k=v[,k2=v2...]\"]"; exit 1; }
+    [[ -z "$tmpl" ]] && { echo "Usage: mkproj add-template <source-folder|-> <template-name> [--script <script-path>] [--dependencies \"k=v[,k2=v2...]\"]"; exit 1; }
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -306,6 +439,18 @@ add_template() {
                 deps_arg="${1#*=}"
                 shift
                 ;;
+            --script)
+                script_arg="$2"
+                shift 2
+                ;;
+            --script=*)
+                script_arg="${1#*=}"
+                shift
+                ;;
+            --force|-f)
+                force=1
+                shift
+                ;;
             *)
                 echo "Unknown option: $1"
                 shift
@@ -313,7 +458,7 @@ add_template() {
         esac
     done
 
-    if [[ ! -d "$src" ]]; then
+    if [[ "$src" != "-" && ! -d "$src" ]]; then
         echo "Source folder '$src' does not exist or is not a directory." >&2
         exit 1
     fi
@@ -322,20 +467,30 @@ add_template() {
     local dest="$TEMPLATES_DIR/$tmpl"
 
     if [[ -e "$dest" ]]; then
-        read -p "Template destination '$dest' exists. Overwrite? [y/N]: " ans
-        case "$ans" in
-            [Yy]*) rm -rf "$dest" ;;
-            *) echo "Aborted."; return 1 ;;
-        esac
+        if [[ $force -ne 1 ]]; then
+            read -r -p "Template destination '$dest' exists. Overwrite? [y/N]: " ans
+            case "$ans" in
+                [Yy]*) rm -rf "$dest" ;;
+                *) echo "Aborted."; return 1 ;;
+            esac
+        else
+            rm -rf "$dest"
+        fi
     fi
 
-    cp -r "$src" "$dest"
-    echo "Template copied to: $dest"
+    if [[ "$src" != "-" ]]; then
+        mkdir -p "$dest"
+        cp -a "$src/." "$dest/" 2>/dev/null || cp -r "$src/." "$dest/" 2>/dev/null || cp -r "$src" "$dest" 2>/dev/null
+        echo "Template copied to: $dest"
+    else
+        mkdir -p "$dest"
+        echo "Created template folder: $dest (no files, script-only)"
+    fi
 
     if [[ -n "$deps_arg" ]]; then
         mkdir -p "$CONFIG_DIR/config"
-        local conf_file="$CONFIG_DIR/config/${tmpl^^}.conf"
-        echo "# Generated by mkproj add-template on $(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$conf_file"
+        local conf_sh="$CONFIG_DIR/config/${tmpl^^}.sh"
+        printf "declare -g -A DEPS_%s\n" "${tmpl^^}" > "$conf_sh"
         local normalized
         normalized="$(echo "$deps_arg" | tr ',' '\n')"
         while IFS= read -r pair; do
@@ -345,9 +500,22 @@ add_template() {
                 echo "Skipping invalid dependency entry: $pair" >&2
                 continue
             fi
-            echo "$pair" >> "$conf_file"
+            key="${pair%%=*}"
+            val="${pair#*=}"
+            printf "DEPS_%s[\"%s\"]=\"%s\"\n" "${tmpl^^}" "$key" "$val" >> "$conf_sh"
         done <<< "$normalized"
-        success "Wrote dependencies to $conf_file"
+        success "Wrote dependencies to $conf_sh"
+    fi
+
+    if [[ -n "$script_arg" ]]; then
+        if [[ ! -f "$script_arg" ]]; then
+            echo "Script '$script_arg' not found." >&2
+            return 1
+        fi
+        mkdir -p "$dest"
+        cp -f "$script_arg" "$dest/create.sh"
+        chmod +x "$dest/create.sh"
+        success "Installed template script to $dest/create.sh"
     fi
 
     success "add-template complete. Run 'mkproj list-templates' to verify templates."
@@ -357,6 +525,12 @@ add_template() {
 remove_template() {
     local name="$1"
     [[ -z "$name" ]] && { echo "Usage: mkproj remove-template <template-name>"; exit 1; }
+
+    local force=0
+
+    if [[ "$2" == "--force" || "$2" == "-f" ]]; then
+        force=1
+    fi
 
     local target=""
     if [[ -d "$TEMPLATES_DIR/$name" ]]; then
@@ -376,20 +550,27 @@ remove_template() {
         exit 1
     fi
 
-    read -p "Permanently remove template '$target' and its dependency file? [y/N]: " ans
-    case "$ans" in
-        [Yy]*) ;;
-        *) echo "Aborted."; return 1 ;;
-    esac
+    if [[ $force -ne 1 ]]; then
+        read -p "Permanently remove template '$target' and its dependency file? [y/N]: " ans
+        case "$ans" in
+            [Yy]*) ;;
+            *) echo "Aborted."; return 1 ;;
+        esac
+    fi
 
     rm -rf "$target"
     echo "Removed template directory: $target"
 
     local base="$(basename "$target")"
+    local conf_sh="$CONFIG_DIR/config/${base^^}.sh"
     local conf_file="$CONFIG_DIR/config/${base^^}.conf"
+    if [[ -f "$conf_sh" ]]; then
+        rm -f "$conf_sh"
+        echo "Removed dependency config: $conf_sh"
+    fi
     if [[ -f "$conf_file" ]]; then
         rm -f "$conf_file"
-        echo "Removed dependency config: $conf_file"
+        echo "Removed legacy dependency config: $conf_file"
     fi
 }
 
@@ -441,6 +622,9 @@ cmd="$1"; shift
 case "$cmd" in
     create)
         create_project "$@"
+        ;;
+    update)
+        update_self
         ;;
     add-template)
         add_template "$@"
