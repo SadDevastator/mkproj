@@ -117,7 +117,6 @@ usage() {
     echo "  mkproj add-template <source-folder|-> <template-name> [--script <script-path>] [--dependencies \"k=v[,k2=v2...]\"]"
     echo "  mkproj remove-template <template-name>"
     echo "  mkproj update-dependancies <template-name> \"k=v[,k2=v2...]\""
-    echo "  mkproj update-templates"
     echo "  mkproj update"
     echo "  mkproj list-templates"
     exit 1
@@ -169,85 +168,14 @@ update_templates() {
 }
 
 update_self() {
-    info "Updating mkproj tool..."
-    if [[ -d "$script_dir/.git" ]]; then
-        git -C "$script_dir" pull --ff-only || warn "git pull failed (non-fatal)"
-        success "Updated mkproj in-place from git repository."
-        return 0
-    fi
-
-    local DEFAULT_REPO="https://github.com/SadDevastator/mkproj.git"
-    if ! command -v git &>/dev/null; then
-        err "git is required to update mkproj when not installed from a git checkout."
+    info "Running remote installer to update mkproj and reinstall default templates..."
+    if command -v curl >/dev/null 2>&1; then
+        "$SHELL" -c "$(curl -fsSL https://raw.githubusercontent.com/SadDevastator/mkproj/master/install.sh)"
         return 1
-    fi
-
-    local tmpdir
-    tmpdir=$(mktemp -d)
-    if git clone --depth 1 "$DEFAULT_REPO" "$tmpdir"; then
-        if [[ -f "$tmpdir/mkproj" ]]; then
-            cp "$tmpdir/mkproj" "$BIN_DIR/mkproj" && chmod +x "$BIN_DIR/mkproj"
-            success "Reinstalled mkproj from $DEFAULT_REPO to $BIN_DIR/mkproj"
-        else
-            err "Cloned repo did not contain mkproj script."
-            rm -rf "$tmpdir"
-            return 1
-        fi
     else
-        err "Failed to clone $DEFAULT_REPO"
-        rm -rf "$tmpdir"
+        err "curl is required to run remote installer. Please install curl and re-run 'mkproj update', or run the installer manually."
         return 1
     fi
-    rm -rf "$tmpdir"
-}
-
-list_templates() {
-    [[ ! -d "$TEMPLATES_DIR" ]] && update_templates
-    info "Available templates:" 
-    if [[ -d "$TEMPLATES_DIR" ]]; then
-        for d in "$TEMPLATES_DIR"/*; do
-            [[ -d "$d" ]] || continue
-            echo "  $(basename "$d")"
-        done
-    fi
-    if [[ -d "$script_dir/templates" ]]; then
-        info "--- bundled ---"
-        for d in "$script_dir/templates"/*; do
-            [[ -d "$d" ]] || continue
-            echo "  $(basename "$d")"
-        done
-    fi
-}
-
-
-find_template() {
-    local tmpl="$1"
-    local lc="${tmpl,,}"
-    local d base
-
-    if [[ -d "$TEMPLATES_DIR" ]]; then
-        for d in "$TEMPLATES_DIR"/*; do
-            [[ -d "$d" ]] || continue
-            base="$(basename "$d")"
-            if [[ "${base,,}" == "$lc" ]]; then
-                echo "$d"
-                return 0
-            fi
-        done
-    fi
-
-    if [[ -d "$script_dir/templates" ]]; then
-        for d in "$script_dir/templates"/*; do
-            [[ -d "$d" ]] || continue
-            base="$(basename "$d")"
-            if [[ "${base,,}" == "$lc" ]]; then
-                echo "$d"
-                return 0
-            fi
-        done
-    fi
-
-    return 1
 }
 
 
@@ -632,7 +560,7 @@ case "$cmd" in
         create_project "$@"
         ;;
     update)
-        update_self && update_templates
+        update_self "$@"
         ;;
     add-template)
         add_template "$@"
@@ -642,9 +570,6 @@ case "$cmd" in
         ;;
     update-dependancies)
         update_dependancies "$@"
-        ;;
-    update-templates)
-        update_templates
         ;;
     list-templates)
         list_templates
