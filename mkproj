@@ -118,6 +118,7 @@ usage() {
     echo "  mkproj remove-template <template-name>"
     echo "  mkproj update-dependancies <template-name> \"k=v[,k2=v2...]\""
     echo "  mkproj update"
+    echo "  mkproj uninstall [--yes]"
     echo "  mkproj list-templates"
     exit 1
 }
@@ -520,6 +521,68 @@ remove_template() {
     fi
 }
 
+
+uninstall() {
+    local assume_yes=0
+    if [[ "$1" == "--yes" || "$1" == "-y" ]]; then
+        assume_yes=1
+    fi
+
+    echo "This will remove the installed mkproj binary and optional user config/templates." 
+    if [[ $assume_yes -ne 1 ]]; then
+        read -p "Proceed with uninstall? [y/N]: " ans
+        case "$ans" in
+            [Yy]*) ;;
+            *) echo "Aborted."; return 1 ;;
+        esac
+    fi
+
+    # Remove binaries
+    if [[ -f "$BIN_DIR/mkproj" ]]; then
+        rm -f "$BIN_DIR/mkproj" && echo "Removed $BIN_DIR/mkproj"
+    else
+        echo "No $BIN_DIR/mkproj found"
+    fi
+    if [[ -L "$BIN_DIR/mkproject" || -f "$BIN_DIR/mkproject" ]]; then
+        # only remove if it points to the installed path or exists
+        rm -f "$BIN_DIR/mkproject" && echo "Removed $BIN_DIR/mkproject"
+    fi
+
+    # Remove PATH snippet from shells
+    SNIPPET='export PATH="$HOME/.local/bin:$PATH"'
+    for rc in "$HOME/.profile" "$HOME/.bashrc" "$HOME/.zshrc"; do
+        if [[ -f "$rc" ]]; then
+            # remove lines matching the snippet
+            sed -i.bak '/export PATH="\$HOME\/\.local\/bin:\$PATH"/d' "$rc" 2>/dev/null || true
+            echo "Cleaned PATH snippet from $rc (backup: ${rc}.bak)"
+        fi
+    done
+    if command -v fish >/dev/null 2>&1; then
+        fish_conf="$HOME/.config/fish/config.fish"
+        if [[ -f "$fish_conf" ]]; then
+            sed -i.bak '/set -gx PATH \$HOME\/\.local\/bin \$PATH/d' "$fish_conf" 2>/dev/null || true
+            echo "Cleaned fish config (backup: ${fish_conf}.bak)"
+        fi
+    fi
+
+    # Optionally remove user config
+    if [[ -d "$CONFIG_DIR" ]]; then
+        if [[ $assume_yes -ne 1 ]]; then
+            read -p "Remove user config at $CONFIG_DIR (templates, config)? [y/N]: " ans2
+            case "$ans2" in
+                [Yy]*) rm -rf "$CONFIG_DIR" && echo "Removed $CONFIG_DIR" ;;
+                *) echo "Left $CONFIG_DIR in place" ;;
+            esac
+        else
+            rm -rf "$CONFIG_DIR" && echo "Removed $CONFIG_DIR"
+        fi
+    else
+        echo "No user config directory at $CONFIG_DIR"
+    fi
+
+    echo "Uninstall complete. You may want to restart your shell to refresh PATH." 
+}
+
 update_dependancies() {
     local name="$1" deps_arg="$2"
     [[ -z "$name" || -z "$deps_arg" ]] && { echo "Usage: mkproj update-dependancies <template-name> \"k=v[,k2=v2...]\""; exit 1; }
@@ -569,6 +632,9 @@ case "$cmd" in
         ;;
     update)
         update_self "$@"
+        ;;
+    uninstall)
+        uninstall "$@"
         ;;
     add-template)
         add_template "$@"
