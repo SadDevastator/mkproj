@@ -122,49 +122,17 @@ usage() {
     exit 1
 }
 
-update_templates() {
-    info "Updating templates..."
-    if [[ -d "$TEMPLATES_DIR/.git" ]]; then
-        git -C "$TEMPLATES_DIR" pull -q || true
-        success "Templates updated from git"
-        return 0
+list_templates() {
+    echo "Available templates in $TEMPLATES_DIR:"
+    local found=0
+    for d in "$TEMPLATES_DIR"/*; do
+        [[ -d "$d" ]] || continue
+        echo "  - $(basename "$d")"
+        found=1
+    done
+    if [[ $found -eq 0 ]]; then
+        echo "  (no templates found)"
     fi
-
-    if [[ -n "$MKPROJ_TEMPLATES_REPO" ]]; then
-        if ! command -v git &>/dev/null; then
-            warn "git not available; cannot clone templates from $MKPROJ_TEMPLATES_REPO"
-        else
-            tmpdir=$(mktemp -d)
-            if git clone --depth 1 "$MKPROJ_TEMPLATES_REPO" "$tmpdir"; then
-                mkdir -p "$TEMPLATES_DIR"
-                cp -a "$tmpdir/." "$TEMPLATES_DIR/" 2>/dev/null || cp -r "$tmpdir/." "$TEMPLATES_DIR/" 2>/dev/null || true
-                rm -rf "$tmpdir"
-                success "Cloned templates from $MKPROJ_TEMPLATES_REPO into $TEMPLATES_DIR"
-                return 0
-            else
-                warn "Failed to clone $MKPROJ_TEMPLATES_REPO"
-                rm -rf "$tmpdir"
-            fi
-        fi
-    fi
-
-    if [[ -d "$script_dir/templates" ]]; then
-        mkdir -p "$TEMPLATES_DIR"
-        for d in "$script_dir/templates"/*; do
-            [[ -d "$d" ]] || continue
-            base="$(basename "$d")"
-            if [[ -e "$TEMPLATES_DIR/$base" ]]; then
-                info "User template '$base' already exists, skipping"
-            else
-                cp -a "$d" "$TEMPLATES_DIR/" 2>/dev/null || cp -r "$d" "$TEMPLATES_DIR/" 2>/dev/null || true
-                success "Installed bundled template: $base"
-            fi
-        done
-        success "Bundled templates seeded into $TEMPLATES_DIR"
-        return 0
-    fi
-
-    warn "No git repo for templates, no bundled templates found, and no MKPROJ_TEMPLATES_REPO set. Add templates manually."
 }
 
 update_self() {
@@ -178,7 +146,6 @@ update_self() {
     fi
 }
 
-
 detect_pkgmgr() {
     local pkgmanagers=("apt" "dnf" "pacman" "zypper" "apk" "xbps-install")
     for mgr in "${pkgmanagers[@]}"; do
@@ -189,7 +156,6 @@ detect_pkgmgr() {
     done
     echo "unknown"
 }
-
 
 install_missing() {
     local tmpl="$1"
@@ -251,7 +217,6 @@ install_missing() {
         warn "Skipping installation. You may install dependencies manually later."
     fi
 }
-
 
 create_project() {
     local name="$1" tmpl="$2"
@@ -351,7 +316,6 @@ create_project() {
 
     echo "Project '$name' ($tmpl) created successfully!"
 }
-
 
 add_template() {
     local src="$1" tmpl="$2"
@@ -457,7 +421,6 @@ add_template() {
     success "add-template complete. Run 'mkproj list-templates' to verify templates."
 }
 
-
 remove_template() {
     local name="$1"
     [[ -z "$name" ]] && { echo "Usage: mkproj remove-template <template-name>"; exit 1; }
@@ -510,7 +473,6 @@ remove_template() {
     fi
 }
 
-
 update_dependancies() {
     local name="$1" deps_arg="$2"
     [[ -z "$name" || -z "$deps_arg" ]] && { echo "Usage: mkproj update-dependancies <template-name> \"k=v[,k2=v2...]\""; exit 1; }
@@ -550,7 +512,6 @@ update_dependancies() {
     done <<< "$normalized"
     echo "Wrote dependencies to $conf_file"
 }
-
 
 [[ $# -lt 1 ]] && usage
 cmd="$1"; shift
