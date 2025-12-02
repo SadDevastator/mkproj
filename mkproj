@@ -79,7 +79,7 @@ load_deps() {
 
         warn "No bundled templates found and no MKPROJ_TEMPLATES_REPO set. Nothing to reinstall."
     eval "$old_nullglob_setting"
-fi
+}
 
 
 find_config_sh() {
