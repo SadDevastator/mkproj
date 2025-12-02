@@ -26,50 +26,58 @@ err() { printf "%b\n" "${RED}${1}${RESET}"; }
 
 load_deps() {
     local tmpl="$1"
-    local confdir="$CONFIG_DIR/config"
-    local conf_file="$confdir/${tmpl^^}.conf"
+        info "Updating templates..."
+        mkdir -p "$TEMPLATES_DIR"
 
-    if [[ ! -d "$confdir" ]]; then
-        mkdir -p "$confdir"
-        local script_dir
-        script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-        if [[ -d "$script_dir/config" ]]; then
-            cp -a "$script_dir/config/." "$confdir/" 2>/dev/null || cp -r "$script_dir/config/." "$confdir/" 2>/dev/null || true
+        # If the templates dir is a git repo, try to pull first
+        if [[ -d "$TEMPLATES_DIR/.git" ]]; then
+            git -C "$TEMPLATES_DIR" pull -q || warn "git pull in templates repo failed"
+            success "Templates updated from git"
         fi
-    fi
 
-    local conf_sh=""
-    for variant in "${tmpl^^}" "${tmpl^}" "${tmpl,,}"; do
-        if [[ -f "$confdir/${variant}.sh" ]]; then
-            conf_sh="$confdir/${variant}.sh"
-            break
-        elif [[ -f "$script_dir/config/${variant}.sh" ]]; then
-            conf_sh="$script_dir/config/${variant}.sh"
-            break
-        fi
-    done
-
-    if [[ -n "$conf_sh" ]]; then
-        . "$conf_sh"
-    elif [[ -f "$conf_file" ]]; then
-        declare -g -A "DEPS_${tmpl^^}"
-        local line key val
-        while IFS= read -r line || [[ -n "$line" ]]; do
-            [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
-            key="${line%%=*}"
-            val="${line#*=}"
-            key="$(echo "$key" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
-            val="$(echo "$val" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
-            if [[ -n "$key" ]]; then
-                eval "DEPS_${tmpl^^}[\"$key\"]=\"$val\""
+        # Determine which repo to use for templates: env override or default repo
+        repo_to_clone="${MKPROJ_TEMPLATES_REPO:-$DEFAULT_REPO}"
+        if [[ -n "$repo_to_clone" ]]; then
+            if command -v git &>/dev/null; then
+                tmpdir=$(mktemp -d)
+                if git clone --depth 1 "$repo_to_clone" "$tmpdir"; then
+                    # If the cloned repo contains a templates/ folder, install those
+                    if [[ -d "$tmpdir/templates" ]]; then
+                        for d in "$tmpdir/templates"/*; do
+                            [[ -d "$d" ]] || continue
+                            base="$(basename "$d")"
+                            rm -rf "$TEMPLATES_DIR/$base"
+                            cp -a "$d" "$TEMPLATES_DIR/" 2>/dev/null || cp -r "$d" "$TEMPLATES_DIR/" 2>/dev/null || true
+                            success "Reinstalled template from repo: $base"
+                        done
+                        success "Templates cloned and reinstalled from $repo_to_clone"
+                    else
+                        warn "Cloned repo $repo_to_clone but no templates/ directory found inside it"
+                    fi
+                    rm -rf "$tmpdir"
+                else
+                    warn "Failed to clone $repo_to_clone"
+                    rm -rf "$tmpdir"
+                fi
+            else
+                warn "git not available; cannot clone templates from $repo_to_clone"
             fi
-        done < "$conf_file"
-    else
-        warn "Note: no dependency config found for '$tmpl' at '$conf_file' (continuing with empty mapping)"
-    fi
-}
+        fi
 
-if [[ -n "$old_nullglob_setting" ]]; then
+        # Reinstall bundled templates by overwriting existing user templates
+        if [[ -d "$script_dir/templates" ]]; then
+            for d in "$script_dir/templates"/*; do
+                [[ -d "$d" ]] || continue
+                base="$(basename "$d")"
+                rm -rf "$TEMPLATES_DIR/$base"
+                cp -a "$d" "$TEMPLATES_DIR/" 2>/dev/null || cp -r "$d" "$TEMPLATES_DIR/" 2>/dev/null || true
+                success "Reinstalled bundled template: $base"
+            done
+            success "Bundled templates reinstalled into $TEMPLATES_DIR"
+            return 0
+        fi
+
+        warn "No bundled templates found and no MKPROJ_TEMPLATES_REPO set. Nothing to reinstall."
     eval "$old_nullglob_setting"
 fi
 
@@ -624,7 +632,7 @@ case "$cmd" in
         create_project "$@"
         ;;
     update)
-        update_self
+        update_self && update_templates
         ;;
     add-template)
         add_template "$@"
