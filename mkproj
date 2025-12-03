@@ -111,6 +111,59 @@ source_config_module() {
     return 1
 }
 
+find_template() {
+    local tmpl="$1"
+    local candidate
+
+    # Exact match in user templates
+    if [[ -d "$TEMPLATES_DIR/$tmpl" ]]; then
+        printf "%s" "$TEMPLATES_DIR/$tmpl"
+        return 0
+    fi
+
+    # Try common case variants in user templates
+    for candidate in "${tmpl^^}" "${tmpl^}" "${tmpl,,}"; do
+        if [[ -d "$TEMPLATES_DIR/$candidate" ]]; then
+            printf "%s" "$TEMPLATES_DIR/$candidate"
+            return 0
+        fi
+    done
+
+    # Case-insensitive search by basename in user templates
+    if [[ -d "$TEMPLATES_DIR" ]]; then
+        for d in "$TEMPLATES_DIR"/*; do
+            [[ -d "$d" ]] || continue
+            if [[ "${tmpl,,}" == "$(basename "$d" | tr '[:upper:]' '[:lower:]')" ]]; then
+                printf "%s" "$d"
+                return 0
+            fi
+        done
+    fi
+
+    # Fallback to bundled templates shipped with the script
+    if [[ -d "$script_dir/templates" ]]; then
+        if [[ -d "$script_dir/templates/$tmpl" ]]; then
+            printf "%s" "$script_dir/templates/$tmpl"
+            return 0
+        fi
+        for candidate in "${tmpl^^}" "${tmpl^}" "${tmpl,,}"; do
+            if [[ -d "$script_dir/templates/$candidate" ]]; then
+                printf "%s" "$script_dir/templates/$candidate"
+                return 0
+            fi
+        done
+        for d in "$script_dir/templates"/*; do
+            [[ -d "$d" ]] || continue
+            if [[ "${tmpl,,}" == "$(basename "$d" | tr '[:upper:]' '[:lower:]')" ]]; then
+                printf "%s" "$d"
+                return 0
+            fi
+        done
+    fi
+
+    return 1
+}
+
 usage() {
     echo "Usage:"
     echo "  mkproj create <project-name> <template-name> [--auto-install] [--git] [--code|-C] [--dir <path>]"
