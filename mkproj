@@ -2,14 +2,13 @@
 
 set -e
 
-old_nullglob_setting="$(shopt -p nullglob 2>/dev/null || true)"
 shopt -s nullglob
 
 CONFIG_DIR="$HOME/.config/mkproj"
 TEMPLATES_DIR="$CONFIG_DIR/templates"
 BIN_DIR="$HOME/.local/bin"
 mkdir -p "$CONFIG_DIR/templates" "$BIN_DIR"
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+script_dir="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 DEFAULT_REPO="https://github.com/SadDevastator/mkproj.git"
 
 RED="\033[31m"
@@ -24,63 +23,121 @@ success() { printf "%b\n" "${GREEN}${1}${RESET}"; }
 warn() { printf "%b\n" "${YELLOW}${1}${RESET}"; }
 err() { printf "%b\n" "${RED}${1}${RESET}"; }
 
-load_deps() {
-    local tmpl="$1"
-        info "Updating templates..."
-        mkdir -p "$TEMPLATES_DIR"
-
-        # If the templates dir is a git repo, try to pull first
-        if [[ -d "$TEMPLATES_DIR/.git" ]]; then
-            git -C "$TEMPLATES_DIR" pull -q || warn "git pull in templates repo failed"
-            success "Templates updated from git"
-        fi
-
-        # Determine which repo to use for templates: env override or default repo
-        repo_to_clone="${MKPROJ_TEMPLATES_REPO:-$DEFAULT_REPO}"
-        if [[ -n "$repo_to_clone" ]]; then
-            if command -v git &>/dev/null; then
-                tmpdir=$(mktemp -d)
-                if git clone --depth 1 "$repo_to_clone" "$tmpdir"; then
-                    # If the cloned repo contains a templates/ folder, install those
-                    if [[ -d "$tmpdir/templates" ]]; then
-                        for d in "$tmpdir/templates"/*; do
-                            [[ -d "$d" ]] || continue
-                            base="$(basename "$d")"
-                            rm -rf "$TEMPLATES_DIR/$base"
-                            cp -a "$d" "$TEMPLATES_DIR/" 2>/dev/null || cp -r "$d" "$TEMPLATES_DIR/" 2>/dev/null || true
-                            success "Reinstalled template from repo: $base"
-                        done
-                        success "Templates cloned and reinstalled from $repo_to_clone"
-                    else
-                        warn "Cloned repo $repo_to_clone but no templates/ directory found inside it"
-                    fi
-                    rm -rf "$tmpdir"
-                else
-                    warn "Failed to clone $repo_to_clone"
-                    rm -rf "$tmpdir"
-                fi
-            else
-                warn "git not available; cannot clone templates from $repo_to_clone"
-            fi
-        fi
-
-        # Reinstall bundled templates by overwriting existing user templates
-        if [[ -d "$script_dir/templates" ]]; then
-            for d in "$script_dir/templates"/*; do
-                [[ -d "$d" ]] || continue
-                base="$(basename "$d")"
-                rm -rf "$TEMPLATES_DIR/$base"
-                cp -a "$d" "$TEMPLATES_DIR/" 2>/dev/null || cp -r "$d" "$TEMPLATES_DIR/" 2>/dev/null || true
-                success "Reinstalled bundled template: $base"
-            done
-            success "Bundled templates reinstalled into $TEMPLATES_DIR"
-            return 0
-        fi
-
-        warn "No bundled templates found and no MKPROJ_TEMPLATES_REPO set. Nothing to reinstall."
-    eval "$old_nullglob_setting"
+# Name fragment used for DEPS_<KEY> arrays and mkproj_create_<key> hooks:
+# template name with anything that isn't a valid identifier char mapped to "_".
+tmpl_key() {
+    local key="${1//[^A-Za-z0-9_]/_}"
+    printf "%s" "$key"
 }
 
+deps_var() {
+    local key
+    key="$(tmpl_key "$1")"
+    printf "DEPS_%s" "${key^^}"
+}
+
+# Populate DEPS_<TEMPLATE> from the template's .sh module and/or legacy .conf file.
+load_deps() {
+    local tmpl="$1" var
+    var="$(deps_var "$tmpl")"
+    declare -g -A "$var"
+    source_config_module "$tmpl" || true
+
+    local variant conf line
+    for variant in "${tmpl^^}" "${tmpl^}" "${tmpl,,}"; do
+        conf="$CONFIG_DIR/config/${variant}.conf"
+        [[ -f "$conf" ]] || continue
+        local -n _deps="$var"
+        while IFS= read -r line; do
+            [[ -z "$line" || "$line" == \#* || "$line" != *=* ]] && continue
+            _deps["${line%%=*}"]="${line#*=}"
+        done < "$conf"
+        break
+    done
+}
+
+# Ensure a command exists. If an installer command is given, offer to run it and
+# prepend the optional bin dir to PATH afterwards. Used by config module hooks.
+require_cmd() {
+    local cmd="$1" installer="$2" bin_dir="$3" ans
+    command -v "$cmd" &>/dev/null && return 0
+    [[ -n "$bin_dir" && -x "$bin_dir/$cmd" ]] && { export PATH="$bin_dir:$PATH"; return 0; }
+
+    if [[ -z "$installer" ]]; then
+        err "$cmd is required but was not found. Install it (or re-run with --auto-install) and try again."
+        return 1
+    fi
+
+    warn "$cmd not found."
+    read -r -p "Install it now? (This will run: $installer) [Y/n]: " ans
+    if [[ ! "${ans:-Y}" =~ ^[Yy] ]]; then
+        err "$cmd is required. Aborting."
+        return 1
+    fi
+    sh -c "$installer" || { err "$cmd install failed"; return 1; }
+
+    [[ -n "$bin_dir" ]] && export PATH="$bin_dir:$PATH"
+    hash -r
+    if ! command -v "$cmd" &>/dev/null; then
+        err "$cmd still not found after installation. Restart your shell or add it to PATH and try again."
+        return 1
+    fi
+}
+
+update_templates() {
+    info "Updating templates..."
+    mkdir -p "$TEMPLATES_DIR"
+
+    # If the templates dir is a git repo, try to pull first
+    if [[ -d "$TEMPLATES_DIR/.git" ]]; then
+        git -C "$TEMPLATES_DIR" pull -q || warn "git pull in templates repo failed"
+        success "Templates updated from git"
+    fi
+
+    # Determine which repo to use for templates: env override or default repo
+    repo_to_clone="${MKPROJ_TEMPLATES_REPO:-$DEFAULT_REPO}"
+    if [[ -n "$repo_to_clone" ]]; then
+        if command -v git &>/dev/null; then
+            tmpdir=$(mktemp -d)
+            if git clone --depth 1 "$repo_to_clone" "$tmpdir"; then
+                # If the cloned repo contains a templates/ folder, install those
+                if [[ -d "$tmpdir/templates" ]]; then
+                    for d in "$tmpdir/templates"/*; do
+                        [[ -d "$d" ]] || continue
+                        base="$(basename "$d")"
+                        rm -rf "$TEMPLATES_DIR/$base"
+                        cp -a "$d" "$TEMPLATES_DIR/" 2>/dev/null || cp -r "$d" "$TEMPLATES_DIR/" 2>/dev/null || true
+                        success "Reinstalled template from repo: $base"
+                    done
+                    success "Templates cloned and reinstalled from $repo_to_clone"
+                else
+                    warn "Cloned repo $repo_to_clone but no templates/ directory found inside it"
+                fi
+                rm -rf "$tmpdir"
+            else
+                warn "Failed to clone $repo_to_clone"
+                rm -rf "$tmpdir"
+            fi
+        else
+            warn "git not available; cannot clone templates from $repo_to_clone"
+        fi
+    fi
+
+    # Reinstall bundled templates by overwriting existing user templates
+    if [[ -d "$script_dir/templates" ]]; then
+        for d in "$script_dir/templates"/*; do
+            [[ -d "$d" ]] || continue
+            base="$(basename "$d")"
+            rm -rf "$TEMPLATES_DIR/$base"
+            cp -a "$d" "$TEMPLATES_DIR/" 2>/dev/null || cp -r "$d" "$TEMPLATES_DIR/" 2>/dev/null || true
+            success "Reinstalled bundled template: $base"
+        done
+        success "Bundled templates reinstalled into $TEMPLATES_DIR"
+        return 0
+    fi
+
+    warn "No bundled templates found and no MKPROJ_TEMPLATES_REPO set. Nothing to reinstall."
+}
 
 find_config_sh() {
     local tmpl="$1"
@@ -95,6 +152,14 @@ find_config_sh() {
     for variant in "${tmpl^^}" "${tmpl^}" "${tmpl,,}"; do
         if [[ -f "$script_dir/config/${variant}.sh" ]]; then
             printf "%s" "$script_dir/config/${variant}.sh"
+            return 0
+        fi
+    done
+    # Case-insensitive basename match (e.g. "typescript" -> TypeScript.sh)
+    local f
+    for f in "$confdir"/*.sh "$script_dir/config"/*.sh; do
+        if [[ "${tmpl,,}" == "$(basename "$f" .sh | tr '[:upper:]' '[:lower:]')" ]]; then
+            printf "%s" "$f"
             return 0
         fi
     done
@@ -166,13 +231,15 @@ find_template() {
 
 usage() {
     echo "Usage:"
-    echo "  mkproj create <project-name> <template-name> [--auto-install] [--git] [--code|-C] [--dir <path>]"
-    echo "  mkproj add-template <source-folder|-> <template-name> [--script <script-path>] [--dependencies \"k=v[,k2=v2...]\"]"
-    echo "  mkproj remove-template <template-name>"
+    echo "  mkproj create <project-name> <template>[:<variant>] [--auto-install] [--git] [--code|-C] [--dir <path>] [--update] [-- <args>...]"
+    echo "  mkproj add-template <source-folder|-> <template-name> [--script <script-path>] [--dependencies \"k=v[,k2=v2...]\"] [--force]"
+    echo "  mkproj remove-template <template-name> [--force]"
     echo "  mkproj update-dependancies <template-name> \"k=v[,k2=v2...]\""
+    echo "  mkproj update-templates"
     echo "  mkproj update"
     echo "  mkproj uninstall [--yes]"
     echo "  mkproj list-templates"
+    echo "  mkproj completions <zsh|fish>"
     exit 1
 }
 
@@ -236,11 +303,158 @@ list_templates() {
     fi
 }
 
+# Unique template names, one per line (used by shell completions).
+template_names() {
+    local d f
+    {
+        for d in "$TEMPLATES_DIR"/* "$script_dir/templates"/*; do
+            [[ -d "$d" ]] && basename "$d"
+        done
+        for f in "$CONFIG_DIR/config"/*.sh "$script_dir/config"/*.sh; do
+            [[ -f "$f" ]] && basename "$f" .sh
+        done
+    } | sort -fu
+}
+
+completions() {
+    case "$1" in
+        zsh) completions_zsh ;;
+        fish) completions_fish ;;
+        *) echo "Usage: mkproj completions <zsh|fish>" >&2; exit 1 ;;
+    esac
+}
+
+completions_zsh() {
+    cat <<'ZSH'
+#compdef mkproj mkproject
+# zsh completion for mkproj. Works from $fpath or when sourced after compinit.
+
+_mkproj_templates() {
+    local -a tmpls
+    tmpls=(${(f)"$(mkproj template-names 2>/dev/null)"})
+    compadd -S '' -q -a tmpls
+}
+
+_mkproj() {
+    local -a cmds
+    cmds=(
+        'create:scaffold a project from a template'
+        'add-template:add a template folder or script'
+        'remove-template:remove a user template'
+        'update-dependancies:write legacy dependency mappings'
+        'list-templates:list available templates'
+        'update-templates:reinstall templates from the repo'
+        'update:update mkproj itself'
+        'uninstall:remove mkproj'
+        'completions:print a shell completion script'
+    )
+
+    if (( CURRENT == 2 )); then
+        _describe -t commands 'mkproj command' cmds
+        return
+    fi
+
+    # Everything after `--` belongs to the template's tool
+    (( ${words[(I)--]} && ${words[(I)--]} < CURRENT )) && return
+
+    case $words[2] in
+        create)
+            case $words[CURRENT-1] in
+                --dir) _directories; return ;;
+            esac
+            if (( CURRENT == 3 )); then
+                _message 'project name'
+            elif (( CURRENT == 4 )); then
+                _mkproj_templates
+            else
+                compadd -- --auto-install --git --code -C --dir --update --
+            fi
+            ;;
+        add-template)
+            case $words[CURRENT-1] in
+                --script) _files; return ;;
+                --dependencies) _message 'k=v[,k2=v2...]'; return ;;
+            esac
+            if (( CURRENT == 3 )); then
+                compadd -- -; _directories
+            elif (( CURRENT == 4 )); then
+                _message 'template name'
+            else
+                compadd -- --script --dependencies --force
+            fi
+            ;;
+        remove-template)
+            if (( CURRENT == 3 )); then _mkproj_templates; else compadd -- --force; fi
+            ;;
+        update-dependancies)
+            if (( CURRENT == 3 )); then _mkproj_templates; else _message 'k=v[,k2=v2...]'; fi
+            ;;
+        uninstall)
+            compadd -- --yes
+            ;;
+        completions)
+            (( CURRENT == 3 )) && compadd -- zsh fish
+            ;;
+    esac
+}
+
+if [[ "${funcstack[1]}" == "_mkproj" ]]; then
+    _mkproj "$@"
+else
+    (( $+functions[compdef] )) || { autoload -Uz compinit && compinit; }
+    compdef _mkproj mkproj mkproject
+fi
+ZSH
+}
+
+completions_fish() {
+    cat <<'FISH'
+# fish completion for mkproj
+
+function __mkproj_no_dashdash
+    not contains -- -- (commandline -opc)
+end
+
+set -l cmds create add-template remove-template update-dependancies list-templates update-templates update uninstall completions
+
+for c in mkproj mkproject
+    complete -c $c -f
+    complete -c $c -n "not __fish_seen_subcommand_from $cmds" -a create -d 'Scaffold a project from a template'
+    complete -c $c -n "not __fish_seen_subcommand_from $cmds" -a add-template -d 'Add a template folder or script'
+    complete -c $c -n "not __fish_seen_subcommand_from $cmds" -a remove-template -d 'Remove a user template'
+    complete -c $c -n "not __fish_seen_subcommand_from $cmds" -a update-dependancies -d 'Write legacy dependency mappings'
+    complete -c $c -n "not __fish_seen_subcommand_from $cmds" -a list-templates -d 'List available templates'
+    complete -c $c -n "not __fish_seen_subcommand_from $cmds" -a update-templates -d 'Reinstall templates from the repo'
+    complete -c $c -n "not __fish_seen_subcommand_from $cmds" -a update -d 'Update mkproj itself'
+    complete -c $c -n "not __fish_seen_subcommand_from $cmds" -a uninstall -d 'Remove mkproj'
+    complete -c $c -n "not __fish_seen_subcommand_from $cmds" -a completions -d 'Print a shell completion script'
+
+    # create <name> <template> [options]
+    complete -c $c -n "__fish_seen_subcommand_from create; and test (count (commandline -opc)) -eq 3" -a "(mkproj template-names 2>/dev/null)" -d template
+    complete -c $c -n "__fish_seen_subcommand_from create; and __mkproj_no_dashdash" -l auto-install -d 'Install missing dependencies'
+    complete -c $c -n "__fish_seen_subcommand_from create; and __mkproj_no_dashdash" -l git -d 'Initialize a git repo'
+    complete -c $c -n "__fish_seen_subcommand_from create; and __mkproj_no_dashdash" -l code -s C -d 'Open in VS Code'
+    complete -c $c -n "__fish_seen_subcommand_from create; and __mkproj_no_dashdash" -l update -d 'Update an existing project'
+    complete -c $c -n "__fish_seen_subcommand_from create; and __mkproj_no_dashdash" -l dir -r -a "(__fish_complete_directories)" -d 'Parent directory'
+
+    # add-template <src|-> <name> [options]
+    complete -c $c -n "__fish_seen_subcommand_from add-template; and test (count (commandline -opc)) -eq 2" -a "- (__fish_complete_directories)"
+    complete -c $c -n "__fish_seen_subcommand_from add-template" -l script -r -F -d 'Create hook script'
+    complete -c $c -n "__fish_seen_subcommand_from add-template" -l dependencies -r -d 'k=v[,k2=v2...]'
+    complete -c $c -n "__fish_seen_subcommand_from add-template" -l force -s f -d 'Overwrite without prompting'
+
+    complete -c $c -n "__fish_seen_subcommand_from remove-template update-dependancies; and test (count (commandline -opc)) -eq 2" -a "(mkproj template-names 2>/dev/null)" -d template
+    complete -c $c -n "__fish_seen_subcommand_from remove-template" -l force -s f -d 'Skip confirmation'
+    complete -c $c -n "__fish_seen_subcommand_from uninstall" -l yes -s y -d 'Do not prompt'
+    complete -c $c -n "__fish_seen_subcommand_from completions" -a "zsh fish"
+end
+FISH
+}
+
 update_self() {
     info "Running remote installer to update mkproj and reinstall default templates..."
     if command -v curl >/dev/null 2>&1; then
-        "$SHELL" -c "$(curl -fsSL https://raw.githubusercontent.com/SadDevastator/mkproj/master/install.sh)"
-        return 1
+        bash -c "$(curl -fsSL https://raw.githubusercontent.com/SadDevastator/mkproj/master/install.sh)"
     else
         err "curl is required to run remote installer. Please install curl and re-run 'mkproj update', or run the installer manually."
         return 1
@@ -262,7 +476,7 @@ install_missing() {
     local tmpl="$1"
     load_deps "$tmpl"
 
-    local -n depmap="DEPS_${tmpl^^}"
+    local -n depmap="$(deps_var "$tmpl")"
     local missing=()
     for dep in "${!depmap[@]}"; do
         command -v "$dep" &>/dev/null || missing+=("${depmap[$dep]}")
@@ -319,10 +533,25 @@ install_missing() {
     fi
 }
 
+# Run a template hook function, or fall back to a <script> inside the project.
+# Hooks run from the parent dir and get: <name> <project-dir> <variant> [extra args...]
+run_hook() {
+    local fn="$1" script="$2" name="$3" dest="$4" parent="$5" variant="$6"
+    shift 6
+    if declare -F "$fn" >/dev/null 2>&1; then
+        info "Running template hook: $fn"
+        (cd "$parent" && PROJECT_NAME="$name" PROJECT_DIR="$dest" "$fn" "$name" "$dest" "$variant" "$@")
+    elif [[ -f "$dest/$script" ]]; then
+        info "Running template hook: $dest/$script"
+        (cd "$dest" && PROJECT_NAME="$name" PROJECT_DIR="$dest" "$SHELL" "./$script" "$@")
+    fi
+}
+
 create_project() {
-    local name="$1" tmpl="$2"
-    shift 2
+    local name="$1" spec="$2"
+    shift 2 || true
     local auto_install=0 git_init=0 open_code=0 update_only=0
+    local -a extra_args=()
 
     local target_dir
     target_dir="$(pwd)"
@@ -352,6 +581,11 @@ create_project() {
                 target_dir="${1#*=}"
                 shift
                 ;;
+            --)
+                shift
+                extra_args=("$@")
+                break
+                ;;
             --*)
                 echo "Unknown option: $1"
                 shift
@@ -362,60 +596,65 @@ create_project() {
         esac
     done
 
-    [[ -z "$name" || -z "$tmpl" ]] && usage
+    [[ -z "$name" || -z "$spec" ]] && usage
 
-    if tmpl_dir="$(find_template "$tmpl")"; then
+    # "<template>:<variant>" passes <variant> to the template's hooks (e.g. bun:astro).
+    local tmpl="${spec%%:*}" variant=""
+    [[ "$spec" == *:* ]] && variant="${spec#*:}"
+
+    mkdir -p "$target_dir"
+    target_dir="$(cd "$target_dir" && pwd)"
+    local dest="$target_dir/$name"
+    local existed=0
+    [[ -e "$dest" ]] && existed=1
+    if ((existed)) && [[ $update_only -ne 1 ]]; then
+        err "Destination '$dest' already exists. Use --update to update an existing project."
+        exit 1
+    fi
+
+    local tmpl_dir=""
+    tmpl_dir="$(find_template "$tmpl")" || tmpl_dir=""
+    source_config_module "$tmpl" || true
+
+    local key
+    key="$(tmpl_key "$tmpl")"
+    local create_fn="mkproj_create_${key,,}" update_fn="mkproj_update_${key,,}"
+    if [[ -z "$tmpl_dir" ]] && ! declare -F "$create_fn" >/dev/null 2>&1; then
+        err "Unsupported template: $tmpl"
+        list_templates
+        exit 1
+    fi
+
+    ((auto_install)) && install_missing "$tmpl"
+
+    if [[ -n "$tmpl_dir" ]]; then
         info "Using template: $tmpl_dir"
-        ((auto_install)) && install_missing "$tmpl"
-
-        local dest="$target_dir/$name"
-        if [[ -d "$dest" && $update_only -ne 1 ]]; then
-            err "Destination '$dest' already exists. Use --update to update an existing project."
-            exit 1
-        fi
-
         mkdir -p "$dest"
         cp -r "$tmpl_dir/." "$dest/"
         find "$dest" -type f -exec sed -i "s/{{PROJECT_NAME}}/$name/g" {} + 2>/dev/null || true
+    fi
 
-        source_config_module "$tmpl" || true
-
-        local create_fn="mkproj_create_${tmpl,,}"
-        if declare -F "$create_fn" >/dev/null 2>&1; then
-            info "Running template create hook function: $create_fn"
-            (cd "$dest" && PROJECT_NAME="$name" PROJECT_DIR="$dest" "$create_fn" "$name" "$dest") || true
-        elif [[ -f "$dest/create.sh" ]]; then
-            info "Running template create hook in $dest..."
-            (cd "$dest" && PROJECT_NAME="$name" PROJECT_DIR="$dest" "$SHELL" "./create.sh") || true
-        fi
-        if [[ -d "$dest" && $update_only -eq 1 ]]; then
-            local update_fn="mkproj_update_${tmpl,,}"
-            if declare -F "$update_fn" >/dev/null 2>&1; then
-                info "Running template update hook function: $update_fn"
-                (cd "$dest" && PROJECT_NAME="$name" PROJECT_DIR="$dest" "$update_fn" "$name" "$dest") || true
-            elif [[ -f "$dest/update.sh" ]]; then
-                info "Running template update hook in $dest..."
-                (cd "$dest" && PROJECT_NAME="$name" PROJECT_DIR="$dest" "$SHELL" "./update.sh") || true
-            fi
-        fi
+    if ((existed)); then
+        run_hook "$update_fn" update.sh "$name" "$dest" "$target_dir" "$variant" "${extra_args[@]}" \
+            || { err "Update hook for '$tmpl' failed."; exit 1; }
+        success "Project '$name' ($spec) updated."
     else
-        source_config_module "$tmpl" || true
-
-        local create_fn="mkproj_create_${tmpl,,}"
-        if declare -F "$create_fn" >/dev/null 2>&1; then
-            info "Running bundled create function: $create_fn"
-            (cd "$target_dir" && PROJECT_NAME="$name" PROJECT_DIR="$target_dir" "$create_fn" "$name" "$target_dir") || true
-        else
-            err "Unsupported template: $tmpl"
-            list_templates
+        run_hook "$create_fn" create.sh "$name" "$dest" "$target_dir" "$variant" "${extra_args[@]}" \
+            || { err "Create hook for '$tmpl' failed."; exit 1; }
+        if [[ ! -d "$dest" ]]; then
+            err "Template '$tmpl' did not create $dest."
             exit 1
         fi
+        success "Project '$name' ($spec) created at $dest"
     fi
-    ((git_init)) && git -C "$name" init -q && echo "📦 Git initialized"
 
-    ((open_code)) && command -v code &>/dev/null && code "$name"
-
-    echo "Project '$name' ($tmpl) created successfully!"
+    if ((git_init)); then
+        git -C "$dest" init -q && info "Git initialized"
+    fi
+    if ((open_code)) && command -v code &>/dev/null; then
+        code "$dest"
+    fi
+    return 0
 }
 
 add_template() {
@@ -490,8 +729,9 @@ add_template() {
 
     if [[ -n "$deps_arg" ]]; then
         mkdir -p "$CONFIG_DIR/config"
-        local conf_sh="$CONFIG_DIR/config/${tmpl^^}.sh"
-        printf "declare -g -A DEPS_%s\n" "${tmpl^^}" > "$conf_sh"
+        local conf_sh="$CONFIG_DIR/config/${tmpl^^}.sh" var
+        var="$(deps_var "$tmpl")"
+        printf "declare -g -A %s\n" "$var" > "$conf_sh"
         local normalized
         normalized="$(echo "$deps_arg" | tr ',' '\n')"
         while IFS= read -r pair; do
@@ -503,7 +743,7 @@ add_template() {
             fi
             key="${pair%%=*}"
             val="${pair#*=}"
-            printf "DEPS_%s[\"%s\"]=\"%s\"\n" "${tmpl^^}" "$key" "$val" >> "$conf_sh"
+            printf "%s[\"%s\"]=\"%s\"\n" "$var" "$key" "$val" >> "$conf_sh"
         done <<< "$normalized"
         success "Wrote dependencies to $conf_sh"
     fi
@@ -601,15 +841,22 @@ uninstall() {
         rm -f "$BIN_DIR/mkproject" && echo "Removed $BIN_DIR/mkproject"
     fi
 
-    # Remove PATH snippet from shells
-    SNIPPET='export PATH="$HOME/.local/bin:$PATH"'
-    for rc in "$HOME/.profile" "$HOME/.bashrc" "$HOME/.zshrc"; do
-        if [[ -f "$rc" ]]; then
-            # remove lines matching the snippet
-            sed -i.bak '/export PATH="\$HOME\/\.local\/bin:\$PATH"/d' "$rc" 2>/dev/null || true
-            echo "Cleaned PATH snippet from $rc (backup: ${rc}.bak)"
+    # Remove PATH snippet and completion line from shells (only files that contain them)
+    local zshrc="${ZDOTDIR:-$HOME}/.zshrc"
+    for rc in "$HOME/.profile" "$HOME/.bashrc" "$zshrc"; do
+        [[ -f "$rc" ]] || continue
+        if grep -qxF 'export PATH="$HOME/.local/bin:$PATH"' "$rc" || grep -qF '# mkproj completions' "$rc"; then
+            sed -i.bak -e '/^export PATH="\$HOME\/\.local\/bin:\$PATH"$/d' -e '/# mkproj completions$/d' "$rc" 2>/dev/null || true
+            echo "Cleaned mkproj lines from $rc (backup: ${rc}.bak)"
         fi
     done
+    local data_home="${XDG_DATA_HOME:-$HOME/.local/share}" f
+    for f in "$data_home/man/man1/mkproj.1" "$data_home/tealdeer/pages/mkproj.page.md"; do
+        [[ -f "$f" ]] && rm -f "$f" && echo "Removed $f"
+    done
+    if [[ -f "$HOME/.config/fish/completions/mkproj.fish" ]]; then
+        rm -f "$HOME/.config/fish/completions/mkproj.fish" && echo "Removed fish completions"
+    fi
     if command -v fish >/dev/null 2>&1; then
         fish_conf="$HOME/.config/fish/config.fish"
         if [[ -f "$fish_conf" ]]; then
@@ -700,6 +947,15 @@ case "$cmd" in
         ;;
     list-templates)
         list_templates
+        ;;
+    update-templates)
+        update_templates
+        ;;
+    template-names)
+        template_names
+        ;;
+    completions)
+        completions "$@"
         ;;
     *)
         usage

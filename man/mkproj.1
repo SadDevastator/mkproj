@@ -1,0 +1,262 @@
+.\" Disable hyphenation and justification (groff man resets them per paragraph)
+.nr HY 0
+.ds AD l
+.TH MKPROJ 1 "2026-10-10" "mkproj" "User Commands"
+.SH NAME
+mkproj \- small project scaffolding helper (templates, hooks, dependency metadata)
+.SH SYNOPSIS
+.B mkproj create
+.I name
+.IR template [: variant ]
+.RB [ \-\-auto\-install ]
+.RB [ \-\-git ]
+.RB [ \-\-code | \-C ]
+.RB [ \-\-dir
+.IR path ]
+.RB [ \-\-update ]
+.RB [ \-\-
+.IR args ...]
+.br
+.B mkproj add\-template
+.IR source\-folder | \-
+.I template\-name
+.RB [ \-\-script
+.IR script ]
+.RB [ \-\-dependencies
+.IR k=v[,k2=v2...] ]
+.RB [ \-\-force ]
+.br
+.B mkproj remove\-template
+.I template\-name
+.RB [ \-\-force ]
+.br
+.B mkproj update\-dependancies
+.I template\-name
+.I k=v[,k2=v2...]
+.br
+.B mkproj list\-templates
+.br
+.B mkproj update\-templates
+.br
+.B mkproj update
+.br
+.B mkproj uninstall
+.RB [ \-\-yes ]
+.br
+.B mkproj completions
+.BR zsh | fish
+.SH DESCRIPTION
+.B mkproj
+scaffolds projects from templates.
+A template is a directory of files, a config module with hook functions, or both.
+Templates live in
+.I ~/.config/mkproj/templates/
+and config modules in
+.IR ~/.config/mkproj/config/ ;
+copies bundled next to the script are used as fallbacks.
+Template and module names are matched case-insensitively.
+.SH COMMANDS
+.TP
+.B create
+Scaffold
+.I name
+from
+.IR template .
+Template files are copied into the project directory with
+.B {{PROJECT_NAME}}
+replaced, then the template's create hook runs.
+.RS
+.TP
+.IB template : variant
+Pass
+.I variant
+to the hook.
+For bun-based templates, any variant that is not built in runs
+.BI "bun create " variant\fR,
+so
+.B bun:astro
+or
+.B web:vite
+work without configuration.
+.TP
+.B \-\-auto\-install
+Install the template's missing dependencies with the system package manager.
+.TP
+.B \-\-git
+Run
+.B git init
+in the new project.
+.TP
+.BR \-\-code ", " \-C
+Open the project in VS Code.
+.TP
+.BI \-\-dir " path"
+Create the project in
+.I path
+instead of the current directory.
+.TP
+.B \-\-update
+Allow an existing project: re-copy template files and run the update hook instead of the create hook.
+.TP
+.BI \-\- " args..."
+Forward the remaining arguments to the template's tool
+.RB ( "uv init" ", " "bun create" ", " "flutter create" ", ...)."
+.RE
+.TP
+.B add\-template
+Copy a folder into the user templates directory, or create a script-only template with
+.BR \- .
+.B \-\-script
+installs a
+.I create.sh
+hook,
+.B \-\-dependencies
+writes a dependency mapping module, and
+.B \-\-force
+overwrites without prompting.
+.TP
+.B remove\-template
+Remove a user template and its config module.
+.TP
+.B update\-dependancies
+Write a legacy
+.I <TEMPLATE>.conf
+dependency mapping.
+.TP
+.B list\-templates
+List user, bundled, and config-only templates.
+.TP
+.B update\-templates
+Reinstall templates from
+.B MKPROJ_TEMPLATES_REPO
+(or the default repository) and the bundled copy, overwriting user templates of the same name.
+.TP
+.B update
+Update mkproj by re-running the installer.
+.TP
+.B uninstall
+Remove the mkproj binary, its PATH and completion lines, completions, and man and tldr pages.
+Asks before removing
+.IR ~/.config/mkproj ;
+.B \-\-yes
+skips all prompts.
+.TP
+.B completions
+Print the zsh or fish completion script.
+.SH BUNDLED TEMPLATES
+.TP
+.B C
+CMake project.
+.TP
+.B Arduino
+Arduino sketch.
+.TP
+.B Rust
+.BR "cargo new" ;
+the variant is a flag, e.g.
+.BR rust:lib .
+.TP
+.B Python
+.BR "uv init" ;
+the variant is a flag, e.g.
+.BR python:lib ", " python:package .
+.TP
+.B Go
+.BR "go mod init" ,
+.IR main.go ,
+then
+.BR "go generate" ;
+the variant is the module path, e.g.
+.BR go:github.com/you/app .
+.TP
+.B Flutter
+.BR "flutter create" ;
+the variant is the template, e.g.
+.BR flutter:package .
+.TP
+.BR TypeScript ", " JavaScript
+.B bun init
+(JavaScript is converted from the TypeScript output).
+.TP
+.B Web
+.BR "bun create astro" ;
+variants
+.BR web:react ", " web:tailwind ", " web:shadcn
+.RB ( "bun init \-\-react" ),
+or any
+.B bun create
+template.
+.TP
+.B Bun
+.BR "bun init" ;
+variants
+.BR js ", " react ", " react=tailwind ", " react=shadcn ,
+or any
+.B bun create
+template.
+.SH CONFIG MODULES
+A module
+.I ~/.config/mkproj/config/<Template>.sh
+is sourced into mkproj and may define
+.BI DEPS_ TEMPLATE
+(an associative array mapping commands to package names),
+.BI mkproj_create_ template\fR,
+and
+.BI mkproj_update_ template\fR.
+Hooks run from the project's parent directory and receive the project name,
+project directory, variant, and any arguments given after
+.BR \-\- .
+Without a hook function,
+.I create.sh
+or
+.I update.sh
+in the project is run instead.
+Modules are executable code; only install trusted ones.
+.SH ENVIRONMENT
+.TP
+.B MKPROJ_TEMPLATES_REPO
+Git repository used by
+.BR update\-templates .
+.TP
+.B MKPROJ_SHELL_SETUP
+.B auto
+or
+.B manual
+skips the installer's shell-setup prompt.
+.SH FILES
+.TP
+.I ~/.config/mkproj/templates/
+User templates.
+.TP
+.I ~/.config/mkproj/config/
+Config modules.
+.TP
+.I ~/.config/mkproj/completions/_mkproj
+zsh completion script.
+.TP
+.I ~/.config/fish/completions/mkproj.fish
+fish completion script.
+.SH EXAMPLES
+.TP
+.B mkproj create hello C
+Create a C project in
+.IR ./hello .
+.TP
+.B mkproj create mylib rust:lib \-\-git
+Create a Rust library and initialize git.
+.TP
+.B mkproj create site web \-\- \-\-template minimal \-\-yes
+Create an Astro site without prompts.
+.TP
+.B mkproj create api python \-\- \-\-python 3.12
+Create a Python app with uv, pinned to Python 3.12.
+.TP
+.B mkproj add\-template \- myscript \-\-script ./create.sh
+Add a script-only template.
+.SH AUTHOR
+Developed by SadDevastator.
+.SH LICENSE
+MIT.
+See the
+.I LICENSE
+file in the repository.

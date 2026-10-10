@@ -4,27 +4,20 @@ DEPS_C[make]="make"
 DEPS_C[cmake]="cmake"
 DEPS_C[gcc]="gcc"
 
+# Point the CMake project name at the new project.
+_mkproj_c_set_name() {
+    local name="$1" dest="$2"
+    [[ -f "$dest/CMakeLists.txt" ]] || return 0
+    sed -i "/^set(PROJECT_NAME/,/)/c\\
+set(PROJECT_NAME\n    ${name}\n)" "$dest/CMakeLists.txt"
+}
+
 mkproj_create_c() {
-    local name="$1" target_dir="$2" dest template_src
-    dest="$target_dir/$name"
+    local name="$1" dest="$2"
 
-    if [[ -n "$TEMPLATES_DIR" && -d "$TEMPLATES_DIR/C" ]]; then
-        template_src="$TEMPLATES_DIR/C"
-    elif [[ -n "$script_dir" && -d "$script_dir/templates/C" ]]; then
-        template_src="$script_dir/templates/C"
-    else
-        template_src=""
-    fi
-
-    if [[ -n "$template_src" ]]; then
-        mkdir -p "$dest"
-        cp -r "$template_src/." "$dest/"
-
-        if [[ -f "$dest/CMakeLists.txt" ]]; then
-            sed -i "/^set(PROJECT_NAME/,/)/c\\
-set(PROJECT_NAME\n    ${name}\n)" "$dest/CMakeLists.txt" || true
-        fi
-
+    # mkproj already copied templates/C into $dest
+    if [[ -f "$dest/CMakeLists.txt" ]]; then
+        _mkproj_c_set_name "$name" "$dest"
         info "Created C project from template: $dest"
         return 0
     fi
@@ -40,7 +33,7 @@ int main(void) {
 CMAIN
 
     cat > "$dest/CMakeLists.txt" <<CMAKE
-cmake_minimum_required(VERSION 3.0)
+cmake_minimum_required(VERSION 3.10)
 project(${name})
 add_executable(${name} main.c)
 CMAKE
@@ -49,11 +42,6 @@ CMAKE
 }
 
 mkproj_update_c() {
-    local name="$1" target_dir="$2" dest
-    dest="$target_dir/$name"
-    if [[ ! -d "$dest" ]]; then
-        err "Project directory '$dest' does not exist; cannot update."
-        return 1
-    fi
-    info "No update actions defined for C projects yet."
+    # Template files were re-copied over the project; restore its name.
+    _mkproj_c_set_name "$1" "$2"
 }

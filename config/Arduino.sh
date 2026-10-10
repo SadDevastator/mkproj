@@ -7,10 +7,9 @@ declare -g -A DEPS_ARDUINO
 DEPS_ARDUINO["arduino-cli"]="arduino-cli"
 
 mkproj_create_arduino() {
-    # Called from mkproj with cwd set to the project directory.
-    # Arguments: $1 = project name, $2 = project dir (optional)
+    # Arguments: $1 = project name, $2 = project dir
     local name="$1"
-    local dest="${2:-$PWD}"
+    local dest="$2"
 
     # Normalize path
     dest="$(cd "$dest" && pwd)"
