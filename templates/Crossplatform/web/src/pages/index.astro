@@ -1,0 +1,33 @@
+---
+---
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width" />
+    <link rel="icon" href="/icon.svg" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <title>{{PROJECT_NAME}}</title>
+  </head>
+  <body>
+    <h1>{{PROJECT_NAME}}</h1>
+    <form id="form">
+      <input id="name" value="world" />
+      <button>Greet</button>
+    </form>
+    <p id="out"></p>
+    <script is:inline>
+      // Inside Tauri the app is already installed; only the browser gets the service worker.
+      if ("serviceWorker" in navigator && !("__TAURI_INTERNALS__" in window)) navigator.serviceWorker.register("/sw.js");
+    </script>
+    <script>
+      import { greet } from "../lib/core";
+      const form = document.querySelector<HTMLFormElement>("#form")!;
+      const name = document.querySelector<HTMLInputElement>("#name")!;
+      const out = document.querySelector<HTMLElement>("#out")!;
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        out.textContent = await greet(name.value);
+      });
+    </script>
+  </body>
+</html>

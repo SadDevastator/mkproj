@@ -1,0 +1,15 @@
+{
+  "name": "{{PROJECT_NAME}}",
+  "private": true,
+  "workspaces": ["web"],
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "web": "bun run --cwd web dev",
+    "bindgen": "bun scripts/bindgen.ts",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

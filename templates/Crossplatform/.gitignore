@@ -1,0 +1,6 @@
+target/
+node_modules/
+web/dist/
+web/.astro/
+bindings/
+src-tauri/gen/

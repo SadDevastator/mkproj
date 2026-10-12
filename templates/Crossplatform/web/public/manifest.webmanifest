@@ -1,0 +1,9 @@
+{
+  "name": "{{PROJECT_NAME}}",
+  "short_name": "{{PROJECT_NAME}}",
+  "start_url": "/",
+  "display": "standalone",
+  "theme_color": "#000000",
+  "background_color": "#ffffff",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

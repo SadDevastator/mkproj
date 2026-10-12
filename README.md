@@ -65,6 +65,10 @@ This repository contains:
 
 - `C` — CMake project from `templates/C`.
 - `Arduino` — sketch from `templates/Arduino`.
+- `Crossplatform` — Rust core (UniFFI), Tauri 2 shell and Astro PWA, from `templates/Crossplatform`.
+  Ships complete (web scaffold, app icons, lockfiles), so only `bun install` needs network.
+  Variant `Crossplatform:fresh` regenerates the scaffold, icons and lockfiles with the latest
+  tools (`bun create astro`, `bun tauri icon`). Linux needs the Tauri system dependencies.
 - `Rust` — `cargo new`. Variant is a flag: `rust:lib`.
 - `Python` — `uv init`. Variant is a flag: `python:lib`, `python:package`,
   `python:script`.
