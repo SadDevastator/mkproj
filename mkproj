@@ -631,7 +631,11 @@ create_project() {
         info "Using template: $tmpl_dir"
         mkdir -p "$dest"
         cp -r "$tmpl_dir/." "$dest/"
-        find "$dest" -type f -exec sed -i "s/{{PROJECT_NAME}}/$name/g" {} + 2>/dev/null || true
+        # Escape \ & / so any name is a literal replacement; only text files that use the placeholder.
+        local repl="${name//\\/\\\\}"
+        repl="${repl//&/\\&}"
+        repl="${repl//\//\\/}"
+        grep -rlIZ '{{PROJECT_NAME}}' "$dest" | xargs -0 -r sed -i "s/{{PROJECT_NAME}}/$repl/g"
     fi
 
     if ((existed)); then
